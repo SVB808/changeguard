@@ -3,6 +3,8 @@ package io.changeguard.analyzer;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -64,5 +66,60 @@ class SpringEndpointExtractorTest {
         assertEquals("GET", endpoint.httpMethod());
         assertEquals("/owners/{id}", endpoint.path());
         assertEquals(List.of("long"), endpoint.parameterTypes());
+    }
+
+    @Test
+    void expandsMultipleClassAndMethodPaths() {
+        String source = """
+                package example;
+
+                import org.springframework.web.bind.annotation.GetMapping;
+                import org.springframework.web.bind.annotation.RequestMapping;
+                import org.springframework.web.bind.annotation.RestController;
+
+                @RequestMapping({"/v1", "/v2"})
+                @RestController
+                class OwnerResource {
+                    @GetMapping(path = {"/owners", "/customers"})
+                    public String list() {
+                        return "ok";
+                    }
+                }
+                """;
+
+        Set<String> paths = extractor.extract(source).stream()
+                .map(Endpoint::path)
+                .collect(Collectors.toSet());
+
+        assertEquals(Set.of(
+                "/v1/owners",
+                "/v1/customers",
+                "/v2/owners",
+                "/v2/customers"
+        ), paths);
+    }
+
+    @Test
+    void normalizesSlashesWhenCombiningMappings() {
+        String source = """
+                package example;
+
+                import org.springframework.web.bind.annotation.GetMapping;
+                import org.springframework.web.bind.annotation.RequestMapping;
+                import org.springframework.web.bind.annotation.RestController;
+
+                @RequestMapping("/api/")
+                @RestController
+                class HealthResource {
+                    @GetMapping("/health/")
+                    public String health() {
+                        return "UP";
+                    }
+                }
+                """;
+
+        Endpoint endpoint = extractor.extract(source).get(0);
+
+        assertEquals("/api/health", endpoint.path());
     }
 }
