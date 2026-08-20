@@ -24,6 +24,21 @@ def _format_endpoint(endpoint) -> str:
     )
 
 
+def _format_security_rule(rule) -> str:
+    selector = rule.selector
+    if rule.patterns:
+        selector += "(" + ", ".join(rule.patterns) + ")"
+    return f"{selector} -> {rule.action}"
+
+
+def _print_security_policy(policy, prefix: str) -> None:
+    typer.echo(f"      {prefix}: {policy.component}#{policy.method_name}")
+    for rule in policy.authorization_rules:
+        typer.echo(f"        authorization: {_format_security_rule(rule)}")
+    if policy.disabled_features:
+        typer.echo("        disabled: " + ", ".join(policy.disabled_features))
+
+
 def _print_manifest(manifest, json_output: bool) -> None:
     if json_output:
         typer.echo(manifest.model_dump_json(indent=2))
@@ -63,6 +78,15 @@ def _print_manifest(manifest, json_output: bool) -> None:
                     typer.echo(
                         "      after:  " + _format_endpoint(semantic_change.after)
                     )
+
+        if file.security_changes:
+            typer.echo("  security semantic changes:")
+            for security_change in file.security_changes:
+                typer.echo(f"    {security_change.kind.value}")
+                if security_change.before is not None:
+                    _print_security_policy(security_change.before, "before")
+                if security_change.after is not None:
+                    _print_security_policy(security_change.after, "after ")
 
         typer.echo("")
 

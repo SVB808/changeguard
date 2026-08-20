@@ -26,11 +26,27 @@ public final class Main {
         String beforeSource = readOptional(options.get("before"));
         String afterSource = readOptional(options.get("after"));
 
-        SpringEndpointExtractor extractor = new SpringEndpointExtractor();
-        List<Endpoint> before = extractor.extract(beforeSource);
-        List<Endpoint> after = extractor.extract(afterSource);
+        SpringEndpointExtractor endpointExtractor = new SpringEndpointExtractor();
+        List<Endpoint> beforeEndpoints = endpointExtractor.extract(beforeSource);
+        List<Endpoint> afterEndpoints = endpointExtractor.extract(afterSource);
+        AnalysisResult endpointResult = new EndpointComparator().compare(beforeEndpoints, afterEndpoints);
 
-        AnalysisResult result = new EndpointComparator().compare(before, after);
+        SpringSecurityExtractor securityExtractor = new SpringSecurityExtractor();
+        List<SecurityPolicy> beforeSecurityPolicies = securityExtractor.extract(beforeSource);
+        List<SecurityPolicy> afterSecurityPolicies = securityExtractor.extract(afterSource);
+        List<SecurityPolicyChange> securityChanges = new SecurityPolicyComparator().compare(
+                beforeSecurityPolicies,
+                afterSecurityPolicies
+        );
+
+        AnalysisResult result = new AnalysisResult(
+                endpointResult.beforeEndpoints(),
+                endpointResult.afterEndpoints(),
+                endpointResult.changes(),
+                beforeSecurityPolicies,
+                afterSecurityPolicies,
+                securityChanges
+        );
 
         ObjectMapper mapper = new ObjectMapper();
         if (options.containsKey("pretty")) {

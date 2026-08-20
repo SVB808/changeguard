@@ -4,13 +4,20 @@ import json
 import os
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
-from changeguard.models import EndpointSemanticChange
+from changeguard.models import EndpointSemanticChange, SecuritySemanticChange
 
 
 class JavaAnalyzerError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class JavaSemanticAnalysis:
+    endpoint_changes: list[EndpointSemanticChange]
+    security_changes: list[SecuritySemanticChange]
 
 
 class JavaSpringAnalyzer:
@@ -46,7 +53,7 @@ class JavaSpringAnalyzer:
         self,
         before_source: str,
         after_source: str,
-    ) -> list[EndpointSemanticChange]:
+    ) -> JavaSemanticAnalysis:
         if not self.is_available():
             raise JavaAnalyzerError(
                 "Java semantic analyzer JAR was not found at "
@@ -91,10 +98,10 @@ class JavaSpringAnalyzer:
                 f"{completed.returncode}: {stderr}"
             )
 
-        return parse_semantic_changes(completed.stdout)
+        return parse_analysis_result(completed.stdout)
 
 
-def parse_semantic_changes(output: str) -> list[EndpointSemanticChange]:
+def _parse_payload(output: str) -> dict:
     try:
         payload = json.loads(output)
     except json.JSONDecodeError as exc:
@@ -102,10 +109,42 @@ def parse_semantic_changes(output: str) -> list[EndpointSemanticChange]:
             "Java semantic analyzer returned invalid JSON"
         ) from exc
 
-    changes = payload.get("changes")
-    if not isinstance(changes, list):
+    if not isinstance(payload, dict):
+        raise JavaAnalyzerError("Java semantic analyzer response was not a JSON object")
+    return payload
+
+
+def parse_analysis_result(output: str) -> JavaSemanticAnalysis:
+    payload = _parse_payload(output)
+
+    endpoint_changes = payload.get("changes")
+    if not isinstance(endpoint_changes, list):
         raise JavaAnalyzerError(
             "Java semantic analyzer response did not contain a changes list"
         )
 
-    return [EndpointSemanticChange.model_validate(change) for change in changes]
+    security_changes = payload.get("securityChanges", [])
+    if not isinstance(security_changes, list):
+        raise JavaAnalyzerError(
+            "Java semantic analyzer response did not contain a valid securityChanges list"
+        )
+
+    return JavaSemanticAnalysis(
+        endpoint_changes=[
+            EndpointSemanticChange.model_validate(change)
+            for change in endpoint_changes
+        ],
+        security_changes=[
+            SecuritySemanticChange.model_validate(change)
+            for change in security_changes
+        ],
+    )
+
+
+def parse_semantic_changes(output: str) -> list[EndpointSemanticChange]:
+    """Backward-compatible helper for endpoint-only callers/tests."""
+    return parse_analysis_result(output).endpoint_changes
+
+
+def parse_security_changes(output: str) -> list[SecuritySemanticChange]:
+    return parse_analysis_result(output).security_changes
