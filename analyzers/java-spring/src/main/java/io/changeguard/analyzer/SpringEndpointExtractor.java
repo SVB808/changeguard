@@ -187,8 +187,8 @@ public final class SpringEndpointExtractor {
             return "";
         }
 
-        List<String> paths = pathsFrom(annotations.getFirst());
-        return paths.isEmpty() ? "" : paths.getFirst();
+        List<String> paths = pathsFrom(annotations.get(0));
+        return paths.isEmpty() ? "" : paths.get(0);
     }
 
     static String joinPaths(String classPath, String methodPath) {
