@@ -50,9 +50,9 @@ def scan_pull_request(
                 base_sha=pull_request.base_sha,
                 head_sha=pull_request.head_sha,
             )
-            classified.semantic_changes.extend(
-                analyzer.analyze_sources(before_source, after_source)
-            )
+            analysis = analyzer.analyze_sources(before_source, after_source)
+            classified.semantic_changes.extend(analysis.endpoint_changes)
+            classified.security_changes.extend(analysis.security_changes)
 
         files.append(classified)
 
