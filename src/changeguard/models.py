@@ -46,6 +46,14 @@ class DependencyKind(str, Enum):
     CONFIG_IMPORT = "config_import"
 
 
+class ImpactKind(str, Enum):
+    POTENTIAL_CONSUMER_IMPACT = "POTENTIAL_CONSUMER_IMPACT"
+
+
+class ImpactMatchLevel(str, Enum):
+    SERVICE = "service"
+
+
 class SpringEndpoint(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -120,6 +128,26 @@ class ServiceDependencyGraph(BaseModel):
     def direct_dependents(self, service: str) -> list[str]:
         return sorted({edge.source for edge in self.edges if edge.target == service})
 
+    def edges_between(self, source: str, target: str) -> list[DependencyEdge]:
+        return [
+            edge
+            for edge in self.edges
+            if edge.source == source and edge.target == target
+        ]
+
+
+class ImpactCandidate(BaseModel):
+    kind: ImpactKind = ImpactKind.POTENTIAL_CONSUMER_IMPACT
+    provider_service: str
+    consumer_service: str
+    changed_file: str
+    trigger_kind: EndpointChangeKind
+    before: SpringEndpoint | None = None
+    after: SpringEndpoint | None = None
+    match_level: ImpactMatchLevel = ImpactMatchLevel.SERVICE
+    reason: str
+    dependency_evidence: list[DependencyEdge] = Field(default_factory=list)
+
 
 class FileChange(BaseModel):
     status: ChangeStatus
@@ -140,7 +168,13 @@ class ChangeManifest(BaseModel):
     head: str
     files: list[FileChange] = Field(default_factory=list)
     dependency_graph: ServiceDependencyGraph | None = None
+    impact_analysis_enabled: bool = False
+    impact_candidates: list[ImpactCandidate] = Field(default_factory=list)
 
     @property
     def changed_file_count(self) -> int:
         return len(self.files)
+
+    @property
+    def impact_candidate_count(self) -> int:
+        return len(self.impact_candidates)
