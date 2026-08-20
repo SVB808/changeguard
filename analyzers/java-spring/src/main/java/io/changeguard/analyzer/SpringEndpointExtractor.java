@@ -35,21 +35,23 @@ public final class SpringEndpointExtractor {
                 continue;
             }
 
-            String classPath = firstPath(type.getAnnotationByName("RequestMapping"));
+            List<String> classPaths = pathsFrom(type.getAnnotationByName("RequestMapping"));
 
             for (MethodDeclaration method : type.getMethods()) {
                 for (Mapping mapping : mappingsFor(method)) {
-                    for (String methodPath : mapping.paths()) {
-                        endpoints.add(new Endpoint(
-                                type.getNameAsString(),
-                                method.getNameAsString(),
-                                mapping.httpMethod(),
-                                joinPaths(classPath, methodPath),
-                                method.getType().asString(),
-                                method.getParameters().stream()
-                                        .map(parameter -> parameter.getType().asString())
-                                        .toList()
-                        ));
+                    for (String classPath : classPaths) {
+                        for (String methodPath : mapping.paths()) {
+                            endpoints.add(new Endpoint(
+                                    type.getNameAsString(),
+                                    method.getNameAsString(),
+                                    mapping.httpMethod(),
+                                    joinPaths(classPath, methodPath),
+                                    method.getType().asString(),
+                                    method.getParameters().stream()
+                                            .map(parameter -> parameter.getType().asString())
+                                            .toList()
+                            ));
+                        }
                     }
                 }
             }
@@ -108,6 +110,15 @@ public final class SpringEndpointExtractor {
             mappings.add(new Mapping(method, paths));
         }
         return mappings;
+    }
+
+    private List<String> pathsFrom(Optional<AnnotationExpr> annotation) {
+        if (annotation.isEmpty()) {
+            return List.of("");
+        }
+
+        List<String> paths = pathsFrom(annotation.get());
+        return paths.isEmpty() ? List.of("") : paths;
     }
 
     private List<String> pathsFrom(AnnotationExpr annotation) {
@@ -184,15 +195,6 @@ public final class SpringEndpointExtractor {
         }
 
         return List.of();
-    }
-
-    private String firstPath(Optional<AnnotationExpr> annotation) {
-        if (annotation.isEmpty()) {
-            return "";
-        }
-
-        List<String> paths = pathsFrom(annotation.get());
-        return paths.isEmpty() ? "" : paths.get(0);
     }
 
     static String joinPaths(String classPath, String methodPath) {
