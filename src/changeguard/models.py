@@ -40,6 +40,12 @@ class SecurityPolicyChangeKind(str, Enum):
     SECURITY_POLICY_CHANGED = "SECURITY_POLICY_CHANGED"
 
 
+class DependencyKind(str, Enum):
+    GATEWAY_ROUTE = "gateway_route"
+    SERVICE_URL = "service_url"
+    CONFIG_IMPORT = "config_import"
+
+
 class SpringEndpoint(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -81,6 +87,40 @@ class SecuritySemanticChange(BaseModel):
     after: SpringSecurityPolicy | None = None
 
 
+class ServiceNode(BaseModel):
+    name: str
+    module_path: str
+
+
+class DependencyEdge(BaseModel):
+    source: str
+    target: str
+    kind: DependencyKind
+    evidence_path: str
+    evidence: str
+
+
+class ServiceDependencyGraph(BaseModel):
+    nodes: list[ServiceNode] = Field(default_factory=list)
+    edges: list[DependencyEdge] = Field(default_factory=list)
+
+    def service_for_path(self, path: str) -> str | None:
+        normalized = path.replace("\\", "/")
+        matching = [
+            node
+            for node in self.nodes
+            if normalized == node.module_path
+            or normalized.startswith(node.module_path.rstrip("/") + "/")
+        ]
+        if not matching:
+            return None
+        matching.sort(key=lambda node: len(node.module_path), reverse=True)
+        return matching[0].name
+
+    def direct_dependents(self, service: str) -> list[str]:
+        return sorted({edge.source for edge in self.edges if edge.target == service})
+
+
 class FileChange(BaseModel):
     status: ChangeStatus
     path: str
@@ -90,6 +130,8 @@ class FileChange(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     semantic_changes: list[EndpointSemanticChange] = Field(default_factory=list)
     security_changes: list[SecuritySemanticChange] = Field(default_factory=list)
+    service: str | None = None
+    direct_dependents: list[str] = Field(default_factory=list)
 
 
 class ChangeManifest(BaseModel):
@@ -97,6 +139,7 @@ class ChangeManifest(BaseModel):
     base: str
     head: str
     files: list[FileChange] = Field(default_factory=list)
+    dependency_graph: ServiceDependencyGraph | None = None
 
     @property
     def changed_file_count(self) -> int:
