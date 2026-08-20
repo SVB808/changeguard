@@ -35,7 +35,7 @@ public final class SpringEndpointExtractor {
                 continue;
             }
 
-            String classPath = firstPath(type.getAnnotationsByName("RequestMapping"));
+            String classPath = firstPath(type.getAnnotationByName("RequestMapping"));
 
             for (MethodDeclaration method : type.getMethods()) {
                 for (Mapping mapping : mappingsFor(method)) {
@@ -59,8 +59,8 @@ public final class SpringEndpointExtractor {
     }
 
     private boolean isSpringController(ClassOrInterfaceDeclaration type) {
-        return !type.getAnnotationsByName("RestController").isEmpty()
-                || !type.getAnnotationsByName("Controller").isEmpty();
+        return type.isAnnotationPresent("RestController")
+                || type.isAnnotationPresent("Controller");
     }
 
     private List<Mapping> mappingsFor(MethodDeclaration method) {
@@ -186,12 +186,12 @@ public final class SpringEndpointExtractor {
         return List.of();
     }
 
-    private String firstPath(List<AnnotationExpr> annotations) {
-        if (annotations.isEmpty()) {
+    private String firstPath(Optional<AnnotationExpr> annotation) {
+        if (annotation.isEmpty()) {
             return "";
         }
 
-        List<String> paths = pathsFrom(annotations.get(0));
+        List<String> paths = pathsFrom(annotation.get());
         return paths.isEmpty() ? "" : paths.get(0);
     }
 
