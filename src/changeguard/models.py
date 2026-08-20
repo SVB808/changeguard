@@ -21,6 +21,8 @@ class EngineeringSurface(str, Enum):
     CONFIG = "config"
     DEPENDENCY = "dependency"
     JAVA_CODE = "java_code"
+    DEPLOYMENT = "deployment"
+    OBSERVABILITY = "observability"
 
 
 class FileChange(BaseModel):
