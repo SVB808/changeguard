@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChangeStatus(str, Enum):
@@ -25,6 +25,32 @@ class EngineeringSurface(str, Enum):
     OBSERVABILITY = "observability"
 
 
+class EndpointChangeKind(str, Enum):
+    ENDPOINT_ADDED = "ENDPOINT_ADDED"
+    ENDPOINT_REMOVED = "ENDPOINT_REMOVED"
+    ENDPOINT_PATH_CHANGED = "ENDPOINT_PATH_CHANGED"
+    ENDPOINT_METHOD_CHANGED = "ENDPOINT_METHOD_CHANGED"
+    REQUEST_SIGNATURE_CHANGED = "REQUEST_SIGNATURE_CHANGED"
+    RESPONSE_TYPE_CHANGED = "RESPONSE_TYPE_CHANGED"
+
+
+class SpringEndpoint(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    controller: str
+    method_name: str = Field(alias="methodName")
+    http_method: str = Field(alias="httpMethod")
+    path: str
+    return_type: str = Field(alias="returnType")
+    parameter_types: list[str] = Field(default_factory=list, alias="parameterTypes")
+
+
+class EndpointSemanticChange(BaseModel):
+    kind: EndpointChangeKind
+    before: SpringEndpoint | None = None
+    after: SpringEndpoint | None = None
+
+
 class FileChange(BaseModel):
     status: ChangeStatus
     path: str
@@ -32,6 +58,7 @@ class FileChange(BaseModel):
     language: str = "unknown"
     surfaces: list[EngineeringSurface] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
+    semantic_changes: list[EndpointSemanticChange] = Field(default_factory=list)
 
 
 class ChangeManifest(BaseModel):
