@@ -53,3 +53,31 @@ def test_missing_file_at_ref_returns_none():
     )
 
     assert result is None
+
+
+def test_lists_only_blob_paths_from_repository_tree():
+    class FakeTreeClient(GitHubClient):
+        def _get_json(self, path: str):
+            assert path == "/repos/acme/orders/git/trees/main?recursive=1"
+            return {
+                "truncated": False,
+                "tree": [
+                    {"path": "pom.xml", "type": "blob"},
+                    {"path": "src", "type": "tree"},
+                    {"path": "src/main/App.java", "type": "blob"},
+                ],
+            }
+
+    assert FakeTreeClient().list_repository_paths("acme/orders", "main") == [
+        "pom.xml",
+        "src/main/App.java",
+    ]
+
+
+def test_rejects_truncated_repository_tree():
+    class TruncatedTreeClient(GitHubClient):
+        def _get_json(self, path: str):
+            return {"truncated": True, "tree": []}
+
+    with pytest.raises(GitHubAPIError, match="truncated"):
+        TruncatedTreeClient().list_repository_paths("acme/orders", "main")
