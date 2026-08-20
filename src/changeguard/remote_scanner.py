@@ -4,6 +4,7 @@ from changeguard.classifier import classify
 from changeguard.dependency_graph import ServiceDependencyGraphBuilder
 from changeguard.git_client import RawGitChange
 from changeguard.github_client import GitHubAPIError, GitHubChangedFile, GitHubClient
+from changeguard.impact_analysis import generate_impact_candidates
 from changeguard.java_analyzer import JavaSpringAnalyzer
 from changeguard.models import ChangeManifest, FileChange, ServiceDependencyGraph
 
@@ -27,12 +28,16 @@ def scan_pull_request(
     semantic_analysis: bool = False,
     dependency_graph_builder: ServiceDependencyGraphBuilder | None = None,
     dependency_analysis: bool = False,
+    impact_analysis: bool = False,
 ) -> ChangeManifest:
     client = client or GitHubClient()
     pull_request = client.get_pull_request(repo_full_name, pr_number)
 
+    run_semantic_analysis = semantic_analysis or impact_analysis
+    run_dependency_analysis = dependency_analysis or impact_analysis
+
     analyzer = semantic_analyzer
-    if semantic_analysis and analyzer is None:
+    if run_semantic_analysis and analyzer is None:
         analyzer = JavaSpringAnalyzer()
 
     files: list[FileChange] = []
@@ -44,7 +49,7 @@ def scan_pull_request(
         )
         classified = classify(change, remote_file.patch or "")
 
-        if semantic_analysis and classified.language == "java":
+        if run_semantic_analysis and classified.language == "java":
             assert analyzer is not None
             before_source, after_source = _load_java_versions(
                 client=client,
@@ -60,7 +65,7 @@ def scan_pull_request(
         files.append(classified)
 
     dependency_graph: ServiceDependencyGraph | None = None
-    if dependency_analysis:
+    if run_dependency_analysis:
         builder = dependency_graph_builder or ServiceDependencyGraphBuilder(client=client)
         dependency_graph = builder.build(
             pull_request.repo_full_name,
@@ -68,12 +73,18 @@ def scan_pull_request(
         )
         _attach_dependency_context(files, dependency_graph)
 
+    impact_candidates = []
+    if impact_analysis and dependency_graph is not None:
+        impact_candidates = generate_impact_candidates(files, dependency_graph)
+
     return ChangeManifest(
         repo=pull_request.repo_full_name,
         base=pull_request.base_sha,
         head=pull_request.head_sha,
         files=files,
         dependency_graph=dependency_graph,
+        impact_analysis_enabled=impact_analysis,
+        impact_candidates=impact_candidates,
     )
 
 
