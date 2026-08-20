@@ -149,21 +149,25 @@ public final class SpringEndpointExtractor {
             return List.of();
         }
 
-        List<Expression> expressions;
-        if (value.get() instanceof ArrayInitializerExpr array) {
-            expressions = array.getValues();
+        List<String> methods = new ArrayList<>();
+        Expression methodExpression = value.get();
+
+        if (methodExpression instanceof ArrayInitializerExpr array) {
+            for (Expression expression : array.getValues()) {
+                addRequestMethod(expression, methods);
+            }
         } else {
-            expressions = List.of(value.get());
+            addRequestMethod(methodExpression, methods);
         }
 
-        List<String> methods = new ArrayList<>();
-        for (Expression expression : expressions) {
-            Matcher matcher = REQUEST_METHOD_PATTERN.matcher(expression.toString());
-            if (matcher.find()) {
-                methods.add(matcher.group(1).toUpperCase(Locale.ROOT));
-            }
-        }
         return methods;
+    }
+
+    private void addRequestMethod(Expression expression, List<String> methods) {
+        Matcher matcher = REQUEST_METHOD_PATTERN.matcher(expression.toString());
+        if (matcher.find()) {
+            methods.add(matcher.group(1).toUpperCase(Locale.ROOT));
+        }
     }
 
     private List<String> stringValues(Expression expression) {
