@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
@@ -121,3 +123,46 @@ class GitHubClient:
             head_sha=metadata["head"]["sha"],
             files=files,
         )
+
+    def get_file_text(
+        self,
+        repo_full_name: str,
+        path: str,
+        ref: str,
+    ) -> str | None:
+        """Fetch one text file at an exact Git ref.
+
+        Returns None when the path does not exist at that ref. This is expected for
+        the base side of added files and the head side of deleted files.
+        """
+        self._validate_repo(repo_full_name)
+        encoded_path = quote(path, safe="/")
+        encoded_ref = quote(ref, safe="")
+
+        try:
+            payload = self._get_json(
+                f"/repos/{repo_full_name}/contents/{encoded_path}?ref={encoded_ref}"
+            )
+        except GitHubAPIError as exc:
+            if "HTTP 404" in str(exc):
+                return None
+            raise
+
+        if not isinstance(payload, dict) or payload.get("type") != "file":
+            raise GitHubAPIError(
+                f"Expected a file while fetching {path} at {ref[:12]}"
+            )
+
+        encoding = payload.get("encoding")
+        content = payload.get("content")
+        if encoding != "base64" or not isinstance(content, str):
+            raise GitHubAPIError(
+                f"Unsupported GitHub content encoding for {path} at {ref[:12]}"
+            )
+
+        try:
+            return base64.b64decode(content).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise GitHubAPIError(
+                f"Could not decode {path} at {ref[:12]} as UTF-8 text"
+            ) from exc
