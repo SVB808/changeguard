@@ -46,7 +46,14 @@ public final class EndpointComparator {
             compareMultiple(oldEndpoints, newEndpoints, changes);
         }
 
-        return new AnalysisResult(List.copyOf(before), List.copyOf(after), List.copyOf(changes));
+        return new AnalysisResult(
+                List.copyOf(before),
+                List.copyOf(after),
+                List.copyOf(changes),
+                List.of(),
+                List.of(),
+                List.of()
+        );
     }
 
     private void compareSingle(Endpoint before, Endpoint after, List<EndpointChange> changes) {
