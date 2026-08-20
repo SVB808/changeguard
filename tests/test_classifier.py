@@ -56,3 +56,65 @@ def test_pom_is_dependency_change():
     result = classify(change, "+<version>3.5.0</version>")
 
     assert EngineeringSurface.DEPENDENCY in result.surfaces
+
+
+def test_dockerfile_is_deployment_change():
+    change = RawGitChange(
+        status_token="A",
+        path="orders-service/Dockerfile",
+    )
+
+    result = classify(change, "+FROM eclipse-temurin:17-jre-alpine")
+
+    assert result.language == "dockerfile"
+    assert EngineeringSurface.DEPLOYMENT in result.surfaces
+
+
+def test_docker_compose_detects_deployment_runtime_config_and_observability():
+    change = RawGitChange(
+        status_token="M",
+        path="docker-compose.yml",
+    )
+    patch = """
++services:
++  api-gateway:
++    environment:
++      SPRING_PROFILES_ACTIVE: docker
++  prometheus:
++    image: prom/prometheus:latest
+"""
+
+    result = classify(change, patch)
+
+    assert EngineeringSurface.DEPLOYMENT in result.surfaces
+    assert EngineeringSurface.CONFIG in result.surfaces
+    assert EngineeringSurface.OBSERVABILITY in result.surfaces
+
+
+def test_prometheus_config_is_observability_change():
+    change = RawGitChange(
+        status_token="A",
+        path="monitoring/prometheus/prometheus.yml",
+    )
+    patch = """
++scrape_configs:
++  - job_name: 'api-gateway'
++    metrics_path: '/actuator/prometheus'
+"""
+
+    result = classify(change, patch)
+
+    assert result.language == "yaml"
+    assert EngineeringSurface.OBSERVABILITY in result.surfaces
+
+
+def test_markdown_document_does_not_become_runtime_surface():
+    change = RawGitChange(
+        status_token="A",
+        path="docs/runtime-validation/README.md",
+    )
+
+    result = classify(change, "+Document Prometheus and Docker validation steps")
+
+    assert result.language == "markdown"
+    assert result.surfaces == []
