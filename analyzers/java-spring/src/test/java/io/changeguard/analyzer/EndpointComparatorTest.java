@@ -87,4 +87,32 @@ class EndpointComparatorTest {
         assertTrue(result.changes().stream()
                 .anyMatch(change -> change.kind() == EndpointChangeKind.RESPONSE_TYPE_CHANGED));
     }
+
+    @Test
+    void detectsHttpMethodAndRequestSignatureChanges() {
+        Endpoint before = new Endpoint(
+                "OwnerResource",
+                "updateOwner",
+                "PUT",
+                "/owners/{id}",
+                "OwnerResponse",
+                List.of("long", "OwnerRequest")
+        );
+        Endpoint after = new Endpoint(
+                "OwnerResource",
+                "updateOwner",
+                "PATCH",
+                "/owners/{id}",
+                "OwnerResponse",
+                List.of("String", "OwnerPatchRequest")
+        );
+
+        AnalysisResult result = comparator.compare(List.of(before), List.of(after));
+
+        assertEquals(2, result.changes().size());
+        assertTrue(result.changes().stream()
+                .anyMatch(change -> change.kind() == EndpointChangeKind.ENDPOINT_METHOD_CHANGED));
+        assertTrue(result.changes().stream()
+                .anyMatch(change -> change.kind() == EndpointChangeKind.REQUEST_SIGNATURE_CHANGED));
+    }
 }
