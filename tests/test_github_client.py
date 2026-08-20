@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 
 from changeguard.github_client import GitHubAPIError, GitHubClient
@@ -15,3 +17,39 @@ def test_rejects_non_positive_pr_number():
 
     with pytest.raises(GitHubAPIError):
         client.get_pull_request("acme/orders", 0)
+
+
+def test_fetches_text_file_at_exact_ref():
+    class FakeContentClient(GitHubClient):
+        def _get_json(self, path: str):
+            assert path == (
+                "/repos/acme/orders/contents/src/main/java/Order.java?ref="
+                + "a" * 40
+            )
+            return {
+                "type": "file",
+                "encoding": "base64",
+                "content": base64.b64encode(b"class Order {}\n").decode("ascii"),
+            }
+
+    result = FakeContentClient().get_file_text(
+        "acme/orders",
+        "src/main/java/Order.java",
+        "a" * 40,
+    )
+
+    assert result == "class Order {}\n"
+
+
+def test_missing_file_at_ref_returns_none():
+    class MissingContentClient(GitHubClient):
+        def _get_json(self, path: str):
+            raise GitHubAPIError("GitHub API returned HTTP 404: Not Found")
+
+    result = MissingContentClient().get_file_text(
+        "acme/orders",
+        "src/main/java/Missing.java",
+        "b" * 40,
+    )
+
+    assert result is None

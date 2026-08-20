@@ -6,20 +6,21 @@ The long-term goal is to answer a harder question than "does this PR look okay?"
 
 > **If this change is merged, what can it break outside the files that changed?**
 
-## V0: deterministic change manifest
+## Current milestone: deterministic evidence + Spring REST semantics
 
-The first milestone intentionally contains **no LLM**.
+ChangeGuard deliberately separates observable facts from probabilistic reasoning.
 
-Given two Git refs, ChangeGuard:
+The current pipeline can:
 
-1. reads the changed files,
-2. extracts the patch for each file,
-3. classifies the engineering surface touched by the change,
-4. emits a structured `ChangeManifest`.
+1. inspect local Git refs or a public GitHub pull request,
+2. classify changed engineering surfaces,
+3. fetch the full before/after Java source for changed files,
+4. parse Spring controllers with a JVM AST analyzer,
+5. emit structured REST endpoint changes.
 
-This manifest becomes the stable input contract for later AST analyzers and agent workflows.
+There is still **no LLM in this stage**. Agent reasoning will be introduced only after the evidence layer is measurable and reliable.
 
-### Current categories
+### Current engineering surfaces
 
 - API contract
 - database
@@ -27,22 +28,40 @@ This manifest becomes the stable input contract for later AST analyzers and agen
 - messaging
 - configuration
 - dependency/build
-- general Java code
+- Java code
+- deployment
+- observability
+
+### Current Spring REST semantic changes
+
+- endpoint added
+- endpoint removed
+- endpoint path changed
+- HTTP method changed
+- request signature changed
+- response type changed
 
 ## Why deterministic-first?
 
-An LLM should reason over evidence, not discover basic facts that Git and static analysis can provide more reliably.
+An LLM should reason over evidence, not rediscover basic facts that Git and static analysis can provide more reliably.
 
-Later versions will add:
+For example, a PR diff may show only:
 
-- Java/Spring semantic analysis
-- cross-service dependency/contract graph
-- specialized risk agents
-- sandboxed verification
-- benchmark suite with seeded regressions
-- GitHub Check / PR integration
+```java
+@GetMapping("/health")
+```
+
+while the unchanged class-level annotation contains:
+
+```java
+@RequestMapping("/vets")
+```
+
+The semantic analyzer reads the full source at both Git revisions and derives the actual endpoint as `GET /vets/health`.
 
 ## Quick start
+
+Python 3.11+ and Java 17+ are required for the current development build.
 
 ```bash
 python -m venv .venv
@@ -57,42 +76,75 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Scan the current repository:
+Build and test the Java/Spring analyzer:
 
 ```bash
-changeguard scan --repo . --base HEAD~1 --head HEAD
+mvn -f analyzers/java-spring/pom.xml test
+mvn -f analyzers/java-spring/pom.xml package
+```
+
+The shaded analyzer JAR is written to:
+
+```text
+analyzers/java-spring/target/changeguard-java-analyzer.jar
+```
+
+### Analyze a public GitHub PR
+
+No clone of the target repository is required:
+
+```bash
+changeguard pr \
+  --repo spring-petclinic/spring-petclinic-microservices \
+  --pr 494
+```
+
+Semantic analysis is enabled by default for changed Java files. Disable it when you only want V0-style surface classification:
+
+```bash
+changeguard pr \
+  --repo spring-petclinic/spring-petclinic-microservices \
+  --pr 494 \
+  --no-semantic
 ```
 
 Structured JSON output:
 
 ```bash
-changeguard scan --repo . --base HEAD~1 --head HEAD --json
+changeguard pr \
+  --repo spring-petclinic/spring-petclinic-microservices \
+  --pr 494 \
+  --json
 ```
 
-## Example output
+### Scan a local repository
+
+```bash
+changeguard scan --repo . --base HEAD~1 --head HEAD
+```
+
+## Example semantic output
 
 ```text
-src/main/java/com/acme/orders/OrderController.java
+spring-petclinic-vets-service/.../VetResource.java
   status: modified
   language: java
-  surfaces: api_contract
-  evidence: Spring web annotation changed
-
-src/main/resources/db/migration/V12__add_status.sql
-  status: added
-  language: sql
-  surfaces: database
-  evidence: Database migration file changed
+  surfaces: java_code, api_contract
+  semantic changes:
+    ENDPOINT_ADDED
+      after:  GET /vets/health | VetResource#health() -> String
 ```
 
 ## Architecture direction
 
 ```mermaid
 flowchart LR
-  PR[Git PR / refs] --> CG[Change extraction]
+  PR[GitHub PR / Git refs] --> CG[Change extraction]
   CG --> M[ChangeManifest]
-  M --> AST[Java semantic analyzer]
-  AST --> G[Dependency + contract graph]
+  M --> SRC[Full source at base + head]
+  SRC --> AST[Java/Spring AST analyzer]
+  AST --> M
+  M --> G[Dependency + contract graph]
   G --> O[Agent orchestrator]
   O --> A1[API contract agent]
   O --> A2[DB migration agent]
@@ -105,12 +157,21 @@ flowchart LR
   V --> R[Release-risk report]
 ```
 
-## Non-goals for V0
+## Planned next layers
+
+- richer Spring REST semantics and type resolution
+- security-policy semantic analysis
+- cross-service dependency/contract graph
+- specialized risk agents
+- sandboxed verification
+- benchmark suite with seeded regressions
+- GitHub Check / PR integration
+
+## Non-goals at this stage
 
 - predicting whether a change is "safe"
-- calling an LLM
-- opening pull requests
-- modifying source code
+- calling an LLM to parse source code
+- opening or modifying pull requests in target repositories
 - assigning arbitrary risk scores
 
 Those features come only after the evidence pipeline is testable.
