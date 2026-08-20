@@ -6,6 +6,7 @@ import typer
 
 from changeguard.git_client import GitError
 from changeguard.github_client import GitHubAPIError
+from changeguard.java_analyzer import JavaAnalyzerError
 from changeguard.remote_scanner import scan_pull_request
 from changeguard.scanner import scan
 
@@ -14,13 +15,22 @@ app = typer.Typer(
 )
 
 
+def _format_endpoint(endpoint) -> str:
+    params = ", ".join(endpoint.parameter_types)
+    return (
+        f"{endpoint.http_method} {endpoint.path} | "
+        f"{endpoint.controller}#{endpoint.method_name}({params}) "
+        f"-> {endpoint.return_type}"
+    )
+
+
 def _print_manifest(manifest, json_output: bool) -> None:
     if json_output:
         typer.echo(manifest.model_dump_json(indent=2))
         return
 
     typer.echo(
-        f"ChangeGuard V0 | {manifest.base[:12]} -> {manifest.head[:12]} | "
+        f"ChangeGuard V1 | {manifest.base[:12]} -> {manifest.head[:12]} | "
         f"{manifest.changed_file_count} changed file(s)"
     )
     typer.echo(f"repository: {manifest.repo}")
@@ -40,6 +50,19 @@ def _print_manifest(manifest, json_output: bool) -> None:
 
         for reason in file.evidence:
             typer.echo(f"  evidence: {reason}")
+
+        if file.semantic_changes:
+            typer.echo("  semantic changes:")
+            for semantic_change in file.semantic_changes:
+                typer.echo(f"    {semantic_change.kind.value}")
+                if semantic_change.before is not None:
+                    typer.echo(
+                        "      before: " + _format_endpoint(semantic_change.before)
+                    )
+                if semantic_change.after is not None:
+                    typer.echo(
+                        "      after:  " + _format_endpoint(semantic_change.after)
+                    )
 
         typer.echo("")
 
@@ -84,6 +107,11 @@ def scan_pr_cmd(
         min=1,
         help="Pull request number.",
     ),
+    semantic: bool = typer.Option(
+        True,
+        "--semantic/--no-semantic",
+        help="Run Java/Spring semantic analysis for changed Java files.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -92,10 +120,17 @@ def scan_pr_cmd(
 ) -> None:
     """Analyze a GitHub pull request without cloning the target repository."""
     try:
-        manifest = scan_pull_request(repo, pr_number)
+        manifest = scan_pull_request(
+            repo,
+            pr_number,
+            semantic_analysis=semantic,
+        )
     except GitHubAPIError as exc:
         typer.echo(f"GitHub error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
+    except JavaAnalyzerError as exc:
+        typer.echo(f"Java analyzer error: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
 
     _print_manifest(manifest, json_output)
 
