@@ -1,10 +1,15 @@
 from changeguard.github_client import GitHubChangedFile, GitHubPullRequest
+from changeguard.java_analyzer import JavaSemanticAnalysis
 from changeguard.models import (
     ChangeStatus,
     EndpointChangeKind,
     EndpointSemanticChange,
     EngineeringSurface,
+    SecurityAuthorizationRule,
+    SecurityPolicyChangeKind,
+    SecuritySemanticChange,
     SpringEndpoint,
+    SpringSecurityPolicy,
 )
 from changeguard.remote_scanner import scan_pull_request
 
@@ -29,28 +34,32 @@ class FakeGitHubClient:
 
 
 class FakeSemanticAnalyzer:
-    def __init__(self):
+    def __init__(self, analysis: JavaSemanticAnalysis | None = None):
         self.calls: list[tuple[str, str]] = []
+        self.analysis = analysis or JavaSemanticAnalysis(
+            endpoint_changes=[
+                EndpointSemanticChange(
+                    kind=EndpointChangeKind.ENDPOINT_ADDED,
+                    after=SpringEndpoint(
+                        controller="VetResource",
+                        method_name="health",
+                        http_method="GET",
+                        path="/vets/health",
+                        return_type="String",
+                        parameter_types=[],
+                    ),
+                )
+            ],
+            security_changes=[],
+        )
 
     def analyze_sources(
         self,
         before_source: str,
         after_source: str,
-    ) -> list[EndpointSemanticChange]:
+    ) -> JavaSemanticAnalysis:
         self.calls.append((before_source, after_source))
-        return [
-            EndpointSemanticChange(
-                kind=EndpointChangeKind.ENDPOINT_ADDED,
-                after=SpringEndpoint(
-                    controller="VetResource",
-                    method_name="health",
-                    http_method="GET",
-                    path="/vets/health",
-                    return_type="String",
-                    parameter_types=[],
-                ),
-            )
-        ]
+        return self.analysis
 
 
 def test_remote_pr_classifies_controller_and_migration():
@@ -179,3 +188,65 @@ def test_semantic_analysis_uses_full_before_and_after_java_source():
     assert semantic_change.kind == EndpointChangeKind.ENDPOINT_ADDED
     assert semantic_change.after is not None
     assert semantic_change.after.path == "/vets/health"
+
+
+def test_semantic_analysis_attaches_security_policy_changes():
+    head_sha = "4" * 40
+    path = "src/main/java/example/SecurityConfig.java"
+    after_source = "class SecurityConfig {}"
+
+    pr = GitHubPullRequest(
+        repo_full_name="acme/orders",
+        number=10,
+        base_sha="3" * 40,
+        head_sha=head_sha,
+        files=[
+            GitHubChangedFile(
+                filename=path,
+                status="added",
+                patch="+class SecurityConfig {}",
+            )
+        ],
+    )
+    client = FakeGitHubClient(
+        pr,
+        sources={(path, head_sha): after_source},
+    )
+    security_policy = SpringSecurityPolicy(
+        component="SecurityWebFilterChain",
+        method_name="securityWebFilterChain",
+        authorization_rules=[
+            SecurityAuthorizationRule(
+                selector="anyExchange",
+                patterns=[],
+                action="permitAll",
+            )
+        ],
+        disabled_features=["csrf", "cors"],
+    )
+    analyzer = FakeSemanticAnalyzer(
+        JavaSemanticAnalysis(
+            endpoint_changes=[],
+            security_changes=[
+                SecuritySemanticChange(
+                    kind=SecurityPolicyChangeKind.SECURITY_POLICY_ADDED,
+                    after=security_policy,
+                )
+            ],
+        )
+    )
+
+    result = scan_pull_request(
+        "acme/orders",
+        10,
+        client=client,
+        semantic_analyzer=analyzer,
+        semantic_analysis=True,
+    )
+
+    assert analyzer.calls == [("", after_source)]
+    assert len(result.files[0].security_changes) == 1
+    security_change = result.files[0].security_changes[0]
+    assert security_change.kind == SecurityPolicyChangeKind.SECURITY_POLICY_ADDED
+    assert security_change.after is not None
+    assert security_change.after.authorization_rules[0].action == "permitAll"
