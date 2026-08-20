@@ -124,6 +124,27 @@ class GitHubClient:
             files=files,
         )
 
+    def list_repository_paths(self, repo_full_name: str, ref: str) -> list[str]:
+        """List blob paths for an exact Git ref using GitHub's recursive tree API."""
+        self._validate_repo(repo_full_name)
+        encoded_ref = quote(ref, safe="")
+        payload = self._get_json(
+            f"/repos/{repo_full_name}/git/trees/{encoded_ref}?recursive=1"
+        )
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("tree"), list):
+            raise GitHubAPIError("Unexpected GitHub response while listing repository tree")
+        if payload.get("truncated"):
+            raise GitHubAPIError(
+                "GitHub returned a truncated repository tree; dependency analysis cannot continue safely"
+            )
+
+        paths: list[str] = []
+        for item in payload["tree"]:
+            if item.get("type") == "blob" and isinstance(item.get("path"), str):
+                paths.append(item["path"])
+        return paths
+
     def get_file_text(
         self,
         repo_full_name: str,

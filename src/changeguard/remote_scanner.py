@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from changeguard.classifier import classify
+from changeguard.dependency_graph import ServiceDependencyGraphBuilder
 from changeguard.git_client import RawGitChange
 from changeguard.github_client import GitHubAPIError, GitHubChangedFile, GitHubClient
 from changeguard.java_analyzer import JavaSpringAnalyzer
-from changeguard.models import ChangeManifest, FileChange
+from changeguard.models import ChangeManifest, FileChange, ServiceDependencyGraph
 
 
 GITHUB_STATUS_TO_GIT = {
@@ -24,6 +25,8 @@ def scan_pull_request(
     client: GitHubClient | None = None,
     semantic_analyzer: JavaSpringAnalyzer | None = None,
     semantic_analysis: bool = False,
+    dependency_graph_builder: ServiceDependencyGraphBuilder | None = None,
+    dependency_analysis: bool = False,
 ) -> ChangeManifest:
     client = client or GitHubClient()
     pull_request = client.get_pull_request(repo_full_name, pr_number)
@@ -56,12 +59,33 @@ def scan_pull_request(
 
         files.append(classified)
 
+    dependency_graph: ServiceDependencyGraph | None = None
+    if dependency_analysis:
+        builder = dependency_graph_builder or ServiceDependencyGraphBuilder(client=client)
+        dependency_graph = builder.build(
+            pull_request.repo_full_name,
+            pull_request.head_sha,
+        )
+        _attach_dependency_context(files, dependency_graph)
+
     return ChangeManifest(
         repo=pull_request.repo_full_name,
         base=pull_request.base_sha,
         head=pull_request.head_sha,
         files=files,
+        dependency_graph=dependency_graph,
     )
+
+
+def _attach_dependency_context(
+    files: list[FileChange],
+    graph: ServiceDependencyGraph,
+) -> None:
+    for file in files:
+        service = graph.service_for_path(file.path)
+        file.service = service
+        if service is not None:
+            file.direct_dependents = graph.direct_dependents(service)
 
 
 def _load_java_versions(

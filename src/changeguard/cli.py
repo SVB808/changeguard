@@ -4,8 +4,9 @@ from pathlib import Path
 
 import typer
 
+from changeguard.dependency_graph import ServiceDependencyGraphBuilder
 from changeguard.git_client import GitError
-from changeguard.github_client import GitHubAPIError
+from changeguard.github_client import GitHubAPIError, GitHubClient
 from changeguard.java_analyzer import JavaAnalyzerError
 from changeguard.remote_scanner import scan_pull_request
 from changeguard.scanner import scan
@@ -39,16 +40,39 @@ def _print_security_policy(policy, prefix: str) -> None:
         typer.echo("        disabled: " + ", ".join(policy.disabled_features))
 
 
+def _print_dependency_graph(graph, json_output: bool) -> None:
+    if json_output:
+        typer.echo(graph.model_dump_json(indent=2))
+        return
+
+    typer.echo(
+        f"services: {len(graph.nodes)} | dependency edges: {len(graph.edges)}"
+    )
+    typer.echo("")
+    for edge in graph.edges:
+        typer.echo(
+            f"{edge.source} -> {edge.target} [{edge.kind.value}]"
+        )
+        typer.echo(f"  evidence: {edge.evidence_path} | {edge.evidence}")
+
+
 def _print_manifest(manifest, json_output: bool) -> None:
     if json_output:
         typer.echo(manifest.model_dump_json(indent=2))
         return
 
+    version = "V2" if manifest.dependency_graph is not None else "V1"
     typer.echo(
-        f"ChangeGuard V1 | {manifest.base[:12]} -> {manifest.head[:12]} | "
+        f"ChangeGuard {version} | {manifest.base[:12]} -> {manifest.head[:12]} | "
         f"{manifest.changed_file_count} changed file(s)"
     )
     typer.echo(f"repository: {manifest.repo}")
+    if manifest.dependency_graph is not None:
+        typer.echo(
+            "dependency graph: "
+            f"{len(manifest.dependency_graph.nodes)} service(s), "
+            f"{len(manifest.dependency_graph.edges)} edge(s)"
+        )
     typer.echo("")
 
     for file in manifest.files:
@@ -62,6 +86,15 @@ def _print_manifest(manifest, json_output: bool) -> None:
             )
         else:
             typer.echo("  surfaces: none")
+
+        if file.service is not None:
+            typer.echo(f"  service: {file.service}")
+            if file.direct_dependents:
+                typer.echo(
+                    "  direct dependents: " + ", ".join(file.direct_dependents)
+                )
+            else:
+                typer.echo("  direct dependents: none")
 
         for reason in file.evidence:
             typer.echo(f"  evidence: {reason}")
@@ -118,6 +151,34 @@ def scan_cmd(
     _print_manifest(manifest, json_output)
 
 
+@app.command("graph")
+def graph_cmd(
+    repo: str = typer.Option(
+        ...,
+        "--repo",
+        help="GitHub repository in owner/name format.",
+    ),
+    ref: str = typer.Option(
+        "main",
+        "--ref",
+        help="Git ref used to build the repository dependency snapshot.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON.",
+    ),
+) -> None:
+    """Build a deterministic service dependency graph from repository evidence."""
+    try:
+        graph = ServiceDependencyGraphBuilder(client=GitHubClient()).build(repo, ref)
+    except GitHubAPIError as exc:
+        typer.echo(f"GitHub error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    _print_dependency_graph(graph, json_output)
+
+
 @app.command("pr")
 def scan_pr_cmd(
     repo: str = typer.Option(
@@ -136,6 +197,11 @@ def scan_pr_cmd(
         "--semantic/--no-semantic",
         help="Run Java/Spring semantic analysis for changed Java files.",
     ),
+    dependencies: bool = typer.Option(
+        False,
+        "--dependencies/--no-dependencies",
+        help="Build a repository service dependency graph and attach direct dependents.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -148,6 +214,7 @@ def scan_pr_cmd(
             repo,
             pr_number,
             semantic_analysis=semantic,
+            dependency_analysis=dependencies,
         )
     except GitHubAPIError as exc:
         typer.echo(f"GitHub error: {exc}", err=True)
