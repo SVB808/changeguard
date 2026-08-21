@@ -46,6 +46,15 @@ def _print_security_policy(policy, prefix: str) -> None:
         typer.echo("        disabled: " + ", ".join(policy.disabled_features))
 
 
+def _print_github_error(exc: GitHubAPIError) -> None:
+    typer.echo(f"GitHub error: {exc}", err=True)
+    if exc.is_rate_limited:
+        typer.echo(
+            "Hint: set GITHUB_TOKEN to an authenticated GitHub token and retry.",
+            err=True,
+        )
+
+
 def _print_dependency_graph(graph, json_output: bool) -> None:
     if json_output:
         typer.echo(graph.model_dump_json(indent=2))
@@ -272,7 +281,7 @@ def graph_cmd(
     try:
         graph = ServiceDependencyGraphBuilder(client=GitHubClient()).build(repo, ref)
     except GitHubAPIError as exc:
-        typer.echo(f"GitHub error: {exc}", err=True)
+        _print_github_error(exc)
         raise typer.Exit(code=2) from exc
 
     _print_dependency_graph(graph, json_output)
@@ -396,7 +405,7 @@ def scan_pr_cmd(
             verification_planning=verification_plan,
         )
     except GitHubAPIError as exc:
-        typer.echo(f"GitHub error: {exc}", err=True)
+        _print_github_error(exc)
         raise typer.Exit(code=2) from exc
     except JavaAnalyzerError as exc:
         typer.echo(f"Java analyzer error: {exc}", err=True)
