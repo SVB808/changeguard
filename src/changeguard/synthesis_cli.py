@@ -9,6 +9,11 @@ from changeguard.models import ChangeManifest, VerificationResult
 from changeguard.synthesis import SynthesisGuardrailError, synthesize_manifest
 
 
+def _read_json_text(path: Path) -> str:
+    """Read UTF-8 JSON while tolerating a leading BOM from Windows PowerShell."""
+    return path.read_text(encoding="utf-8-sig")
+
+
 def synthesize_cmd(
     manifest_path: Path = typer.Option(
         ...,
@@ -31,11 +36,9 @@ def synthesize_cmd(
 ) -> None:
     """Synthesize only evidence already produced by ChangeGuard."""
     try:
-        manifest = ChangeManifest.model_validate_json(
-            manifest_path.read_text(encoding="utf-8")
-        )
+        manifest = ChangeManifest.model_validate_json(_read_json_text(manifest_path))
         results = [
-            VerificationResult.model_validate_json(path.read_text(encoding="utf-8"))
+            VerificationResult.model_validate_json(_read_json_text(path))
             for path in verification_result
         ]
         report = synthesize_manifest(manifest, results)
