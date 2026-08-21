@@ -95,7 +95,14 @@ def _create_openai_client():
             'OpenAI selector requires the optional AI dependency. Install with '
             '`python -m pip install -e ".[dev,ai]"`.'
         ) from exc
-    return OpenAI()
+
+    try:
+        return OpenAI()
+    except Exception as exc:
+        raise ModelSelectionError(
+            "Could not initialize the OpenAI client. Ensure OPENAI_API_KEY is set "
+            "and the optional AI dependency is installed."
+        ) from exc
 
 
 def _instructions() -> str:
