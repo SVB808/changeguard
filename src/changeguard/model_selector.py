@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -13,6 +15,8 @@ from changeguard.synthesis import (
 
 
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
+DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
 class ModelSelectionError(RuntimeError):
@@ -27,12 +31,7 @@ class _SelectionPayload(BaseModel):
 
 
 class OpenAIEvidenceSelector:
-    """Select grounded ChangeGuard evidence IDs with OpenAI Structured Outputs.
-
-    The model receives only already-derived evidence records and can return only a
-    bounded list of evidence IDs. The downstream synthesis graph still validates
-    that every returned ID exists and is unique before rendering a report.
-    """
+    """Select grounded ChangeGuard evidence IDs with OpenAI Structured Outputs."""
 
     def __init__(
         self,
@@ -87,6 +86,88 @@ class OpenAIEvidenceSelector:
         )
 
 
+class OllamaEvidenceSelector:
+    """Select grounded evidence IDs with a local Ollama structured-output call.
+
+    Ollama receives the same untrusted evidence records as the OpenAI selector and
+    returns only the small JSON selection object. ChangeGuard still validates every
+    selected ID before deterministic rendering.
+    """
+
+    def __init__(
+        self,
+        model: str = DEFAULT_OLLAMA_MODEL,
+        base_url: str = DEFAULT_OLLAMA_URL,
+        timeout_seconds: float = 120.0,
+        opener: Callable[..., Any] | None = None,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self._opener = opener or urlopen
+
+    def select(self, evidence: list[EvidenceItem]) -> SynthesisSelection:
+        if not evidence:
+            return SynthesisSelection(
+                selected_evidence_ids=[],
+                selector="ollama",
+                model=self.model,
+            )
+
+        schema = _selection_schema()
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _instructions()},
+                {
+                    "role": "user",
+                    "content": (
+                        _evidence_prompt(evidence)
+                        + "\nReturn JSON matching this schema exactly: "
+                        + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                    ),
+                },
+            ],
+            "stream": False,
+            "format": schema,
+            "options": {"temperature": 0},
+        }
+        request = Request(
+            f"{self.base_url}/api/chat",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with self._opener(request, timeout=self.timeout_seconds) as response:
+                envelope = json.loads(response.read().decode("utf-8"))
+            raw = envelope["message"]["content"]
+            selection = _SelectionPayload.model_validate_json(raw)
+        except HTTPError as exc:
+            detail = _http_error_detail(exc)
+            raise ModelSelectionError(
+                f"Ollama evidence selection failed with HTTP {exc.code}: {detail}"
+            ) from exc
+        except URLError as exc:
+            raise ModelSelectionError(
+                f"Could not connect to Ollama at {self.base_url}. Ensure Ollama is "
+                "installed, running, and serving its local API."
+            ) from exc
+        except (ValidationError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise ModelSelectionError(
+                "Ollama selector returned an invalid structured evidence selection."
+            ) from exc
+
+        return SynthesisSelection(
+            selected_evidence_ids=selection.selected_evidence_ids,
+            selector="ollama",
+            model=self.model,
+            input_tokens=_optional_int(envelope.get("prompt_eval_count")),
+            output_tokens=_optional_int(envelope.get("eval_count")),
+        )
+
+
 def _create_openai_client():
     try:
         from openai import OpenAI
@@ -138,8 +219,8 @@ def _evidence_prompt(evidence: list[EvidenceItem]) -> str:
 
 
 def _selection_schema() -> dict[str, Any]:
-    # Keep the provider schema deliberately simple for broad Structured Outputs
-    # compatibility; ChangeGuard enforces the selection-count limit after parsing.
+    # Keep the provider schema deliberately simple for broad structured-output
+    # compatibility; ChangeGuard enforces selection count, uniqueness, and grounding.
     return {
         "type": "object",
         "properties": {
@@ -151,3 +232,24 @@ def _selection_schema() -> dict[str, Any]:
         "required": ["selected_evidence_ids"],
         "additionalProperties": False,
     }
+
+
+def _http_error_detail(exc: HTTPError) -> str:
+    try:
+        raw = exc.read().decode("utf-8", errors="replace")
+        payload = json.loads(raw)
+        detail = payload.get("error")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+        pass
+    return exc.reason or "request failed"
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
