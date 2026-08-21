@@ -9,6 +9,7 @@ from changeguard.model_selector import (
     DEFAULT_OLLAMA_MODEL,
     DEFAULT_OLLAMA_URL,
     DEFAULT_OPENAI_MODEL,
+    ModelSelectionError,
     OllamaEvidenceSelector,
     OpenAIEvidenceSelector,
 )
@@ -87,7 +88,7 @@ def evaluate_selector_cmd(
         corpus_model = load_selection_corpus(corpus)
         selector = _create_selector(selector_name, model=model, ollama_url=ollama_url)
         report = evaluate_selector(corpus_model, selector, runs_per_case=runs)
-    except (OSError, ValueError, ValidationError) as exc:
+    except (OSError, ValueError, ValidationError, ModelSelectionError) as exc:
         typer.echo(f"Selector evaluation input error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
 
