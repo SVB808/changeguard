@@ -145,6 +145,97 @@ class AggregatorGraphClient:
         return None
 
 
+class SpringClientStylesGraphClient:
+    paths = [
+        "checkout-app/pom.xml",
+        "checkout-app/src/main/resources/application.properties",
+        "checkout-app/src/main/java/example/OrdersFeignClient.java",
+        "checkout-app/src/main/java/example/OrdersRestTemplateClient.java",
+        "orders-app/pom.xml",
+        "orders-app/src/main/resources/application.properties",
+    ]
+    contents = {
+        "checkout-app/src/main/resources/application.properties": (
+            "spring.application.name=checkout-service\n"
+        ),
+        "orders-app/src/main/resources/application.properties": (
+            "spring.application.name=orders-service\n"
+        ),
+        "checkout-app/src/main/java/example/OrdersFeignClient.java": """
+            @FeignClient(name = "${ORDERS_SERVICE:orders-service}")
+            @RequestMapping("/api")
+            interface OrdersFeignClient {
+                @GetMapping("/orders/{orderId}")
+                Order findOrder(String orderId);
+
+                @RequestMapping(value = "/orders", method = RequestMethod.POST)
+                Order createOrder(OrderRequest request);
+            }
+        """,
+        "checkout-app/src/main/java/example/OrdersRestTemplateClient.java": """
+            class OrdersRestTemplateClient {
+                void calls(RestTemplate restTemplate, Object request, Object entity) {
+                    restTemplate.getForEntity(
+                        "http://orders-service/orders/{orderId}?expand=items",
+                        Order.class,
+                        "42"
+                    );
+                    restTemplate.postForObject(
+                        "http://orders-service/orders",
+                        request,
+                        Order.class
+                    );
+                    restTemplate.exchange(
+                        "http://orders-service/orders/{orderId}",
+                        HttpMethod.PATCH,
+                        entity,
+                        Order.class,
+                        "42"
+                    );
+                    restTemplate.delete("http://orders-service/orders/{orderId}", "42");
+                }
+            }
+        """,
+    }
+
+    def list_repository_paths(self, repo_full_name: str, ref: str) -> list[str]:
+        return self.paths
+
+    def get_file_text(self, repo_full_name: str, path: str, ref: str) -> str | None:
+        return self.contents.get(path)
+
+
+class DynamicClientGraphClient:
+    paths = [
+        "consumer-service/pom.xml",
+        "consumer-service/src/main/java/example/DynamicFeignClient.java",
+        "consumer-service/src/main/java/example/DynamicRestTemplateClient.java",
+        "orders-service/pom.xml",
+    ]
+    contents = {
+        "consumer-service/src/main/java/example/DynamicFeignClient.java": """
+            @FeignClient(name = "${ORDERS_SERVICE}")
+            interface DynamicFeignClient {
+                @GetMapping("/orders/{id}")
+                Order get(String id);
+            }
+        """,
+        "consumer-service/src/main/java/example/DynamicRestTemplateClient.java": """
+            class DynamicRestTemplateClient {
+                Object get(RestTemplate restTemplate, String baseUrl) {
+                    return restTemplate.getForObject(baseUrl + "/orders/42", Order.class);
+                }
+            }
+        """,
+    }
+
+    def list_repository_paths(self, repo_full_name: str, ref: str) -> list[str]:
+        return self.paths
+
+    def get_file_text(self, repo_full_name: str, path: str, ref: str) -> str | None:
+        return self.contents.get(path)
+
+
 def test_builds_graph_from_gateway_routes_and_service_urls():
     graph = ServiceDependencyGraphBuilder(client=FakeGraphClient()).build(
         "acme/petclinic",
@@ -281,3 +372,80 @@ def test_excludes_pure_aggregator_but_keeps_child_modules():
         "orders-service": "platform/orders-service",
         "payments-service": "platform/payments-service",
     }
+
+
+def test_feign_client_creates_declarative_dependency():
+    graph = ServiceDependencyGraphBuilder(client=SpringClientStylesGraphClient()).build(
+        "acme/shop",
+        "main",
+    )
+
+    assert (
+        "checkout-service",
+        "orders-service",
+        DependencyKind.DECLARATIVE_CLIENT,
+    ) in {(edge.source, edge.target, edge.kind) for edge in graph.edges}
+    assert graph.direct_dependents("orders-service") == ["checkout-service"]
+
+
+def test_feign_client_extracts_class_and_method_mapping_calls():
+    graph = ServiceDependencyGraphBuilder(client=SpringClientStylesGraphClient()).build(
+        "acme/shop",
+        "main",
+    )
+
+    feign_calls = [
+        call
+        for call in graph.consumer_calls
+        if call.evidence_path.endswith("OrdersFeignClient.java")
+    ]
+    assert {(call.http_method, call.path) for call in feign_calls} == {
+        ("GET", "/api/orders/{orderId}"),
+        ("POST", "/api/orders"),
+    }
+    assert all(call.target_service == "orders-service" for call in feign_calls)
+
+
+def test_resttemplate_extracts_literal_method_and_route_calls():
+    graph = ServiceDependencyGraphBuilder(client=SpringClientStylesGraphClient()).build(
+        "acme/shop",
+        "main",
+    )
+
+    calls = [
+        call
+        for call in graph.consumer_calls
+        if call.evidence_path.endswith("OrdersRestTemplateClient.java")
+    ]
+    assert {(call.http_method, call.path) for call in calls} == {
+        ("GET", "/orders/{orderId}"),
+        ("POST", "/orders"),
+        ("PATCH", "/orders/{orderId}"),
+        ("DELETE", "/orders/{orderId}"),
+    }
+    assert all(call.target_service == "orders-service" for call in calls)
+
+
+def test_feign_target_with_environment_default_is_resolved():
+    graph = ServiceDependencyGraphBuilder(client=SpringClientStylesGraphClient()).build(
+        "acme/shop",
+        "main",
+    )
+
+    edge = next(
+        edge
+        for edge in graph.edges
+        if edge.kind == DependencyKind.DECLARATIVE_CLIENT
+    )
+    assert edge.target == "orders-service"
+    assert "${ORDERS_SERVICE:orders-service}" in edge.evidence
+
+
+def test_dynamic_feign_and_resttemplate_urls_remain_unresolved():
+    graph = ServiceDependencyGraphBuilder(client=DynamicClientGraphClient()).build(
+        "acme/dynamic",
+        "main",
+    )
+
+    assert graph.consumer_calls == []
+    assert graph.edges == []

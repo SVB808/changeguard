@@ -20,7 +20,7 @@ CONFIG_PATH = re.compile(
     re.IGNORECASE,
 )
 CLIENT_SOURCE_PATH = re.compile(
-    r"(?:^|/)src/main/java/.+(?:Client|Gateway|Connector)\.java$",
+    r"(?:^|/)src/main/java/.+(?:Client|Gateway|Connector|Feign)\.java$",
     re.IGNORECASE,
 )
 LB_URI = re.compile(r"\blb://([A-Za-z0-9_.-]+)")
@@ -31,6 +31,30 @@ EXPLICIT_HTTP_CALL = re.compile(
     r"(?:\?[^\"#]*)?\"",
     re.IGNORECASE | re.DOTALL,
 )
+REST_TEMPLATE_SIMPLE_CALL = re.compile(
+    r"\.(getForObject|getForEntity|postForObject|postForEntity|put|delete)\s*\(\s*"
+    r"\"https?://([A-Za-z0-9_.-]+)(?::\d+)?([^\"?#]*)"
+    r"(?:\?[^\"#]*)?\"",
+    re.IGNORECASE | re.DOTALL,
+)
+REST_TEMPLATE_EXCHANGE = re.compile(
+    r"\.exchange\s*\(\s*"
+    r"\"https?://([A-Za-z0-9_.-]+)(?::\d+)?([^\"?#]*)"
+    r"(?:\?[^\"#]*)?\"\s*,\s*HttpMethod\.(GET|POST|PUT|PATCH|DELETE)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+FEIGN_CLIENT = re.compile(r"@FeignClient\s*\((?P<args>[^)]*)\)", re.IGNORECASE | re.DOTALL)
+REQUEST_MAPPING = re.compile(
+    r"@RequestMapping\s*(?:\((?P<args>[^)]*)\))?",
+    re.IGNORECASE | re.DOTALL,
+)
+FEIGN_METHOD_DECL = re.compile(
+    r"@(?P<mapping>GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)"
+    r"\s*(?:\((?P<args>[^)]*)\))?\s*"
+    r"(?:public\s+)?[A-Za-z0-9_$.<>?,\[\]\s]+\s+[A-Za-z_$][A-Za-z0-9_$]*\s*"
+    r"\([^;{}]*\)\s*;",
+    re.IGNORECASE | re.DOTALL,
+)
 DOTTED_APPLICATION_NAME = re.compile(
     r"^\s*spring\.application\.name\s*[:=]\s*(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -38,6 +62,19 @@ DOTTED_APPLICATION_NAME = re.compile(
 SERVICE_ROLE_SUFFIX = re.compile(r"(?:service|server|gateway)$", re.IGNORECASE)
 LITERAL_SERVICE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 ENV_DEFAULT = re.compile(r"^\$\{[^}:]+:([^}]+)\}$")
+STRING_LITERAL = re.compile(r'\"([^\"]+)\"')
+MAPPING_PATH_NAMED = re.compile(
+    r"\b(?:value|path)\s*=\s*\"([^\"]+)\"",
+    re.IGNORECASE,
+)
+FEIGN_TARGET_NAMED = re.compile(
+    r"\b(?:name|value)\s*=\s*\"([^\"]+)\"",
+    re.IGNORECASE,
+)
+REQUEST_METHOD = re.compile(
+    r"\bRequestMethod\.(GET|POST|PUT|PATCH|DELETE)\b",
+    re.IGNORECASE,
+)
 
 
 class ServiceDependencyGraphBuilder:
@@ -52,18 +89,22 @@ class ServiceDependencyGraphBuilder:
 
     High-confidence dependency evidence currently includes:
     - Spring Cloud Gateway `lb://service` routes
-    - explicit service URLs in application configuration
-    - explicit service URLs in Java classes named Client/Gateway/Connector
+    - explicit service URLs in application configuration and client-like Java sources
+    - literal OpenFeign `@FeignClient` target declarations
 
-    Literal WebClient-style HTTP method + route calls are extracted when possible.
-    Dynamic URI construction is intentionally left unresolved rather than guessed.
+    Consumer HTTP method + route evidence is extracted from literal WebClient,
+    RestTemplate, and OpenFeign declarations when possible. Dynamic URI construction
+    is intentionally left unresolved rather than guessed.
     """
 
     def __init__(self, client: GitHubClient | None = None) -> None:
         self.client = client or GitHubClient()
 
     def build(self, repo_full_name: str, ref: str) -> ServiceDependencyGraph:
-        paths = [path.replace("\\", "/") for path in self.client.list_repository_paths(repo_full_name, ref)]
+        paths = [
+            path.replace("\\", "/")
+            for path in self.client.list_repository_paths(repo_full_name, ref)
+        ]
         content_cache: dict[str, str | None] = {}
 
         def read_text(path: str) -> str | None:
@@ -269,13 +310,7 @@ class ServiceDependencyGraphBuilder:
 
     @staticmethod
     def _fallback_module_names(modules: list[str]) -> dict[str, str]:
-        """Use module basenames, stripping only safe conventional sibling prefixes.
-
-        Example: sibling modules `acme-orders-service` and `acme-api-gateway`
-        can become `orders-service` and `api-gateway`. Prefix stripping is skipped
-        unless every stripped sibling still ends in service/server/gateway, avoiding
-        broad guesses for arbitrary library module groups.
-        """
+        """Use module basenames, stripping only safe conventional sibling prefixes."""
         groups: dict[str, list[str]] = defaultdict(list)
         for module in modules:
             parent, _, _ = module.rpartition("/")
@@ -346,6 +381,20 @@ class ServiceDependencyGraphBuilder:
                 )
             )
 
+        feign_target = self._extract_feign_target(content)
+        if feign_target in known_services and feign_target != source:
+            match = FEIGN_CLIENT.search(content)
+            assert match is not None
+            edges.append(
+                DependencyEdge(
+                    source=source,
+                    target=feign_target,
+                    kind=DependencyKind.DECLARATIVE_CLIENT,
+                    evidence_path=path,
+                    evidence=match.group(0).strip(),
+                )
+            )
+
         return edges
 
     def _extract_consumer_calls(
@@ -356,25 +405,196 @@ class ServiceDependencyGraphBuilder:
         known_services: set[str],
     ) -> list[ConsumerHttpCall]:
         calls: list[ConsumerHttpCall] = []
-        for match in EXPLICIT_HTTP_CALL.finditer(content):
-            http_method = match.group(1).upper()
-            target = match.group(2)
-            if target not in known_services or target == source:
-                continue
+        calls.extend(
+            self._extract_webclient_calls(source, path, content, known_services)
+        )
+        calls.extend(
+            self._extract_resttemplate_calls(source, path, content, known_services)
+        )
+        calls.extend(self._extract_feign_calls(source, path, content, known_services))
+        return calls
 
-            raw_path = match.group(3) or "/"
-            normalized_path = self._normalize_call_path(raw_path)
+    def _extract_webclient_calls(
+        self,
+        source: str,
+        path: str,
+        content: str,
+        known_services: set[str],
+    ) -> list[ConsumerHttpCall]:
+        calls: list[ConsumerHttpCall] = []
+        for match in EXPLICIT_HTTP_CALL.finditer(content):
+            call = self._absolute_url_call(
+                source=source,
+                path=path,
+                target=match.group(2),
+                http_method=match.group(1).upper(),
+                raw_path=match.group(3) or "/",
+                evidence=match.group(0).strip(),
+                known_services=known_services,
+            )
+            if call is not None:
+                calls.append(call)
+        return calls
+
+    def _extract_resttemplate_calls(
+        self,
+        source: str,
+        path: str,
+        content: str,
+        known_services: set[str],
+    ) -> list[ConsumerHttpCall]:
+        method_map = {
+            "getforobject": "GET",
+            "getforentity": "GET",
+            "postforobject": "POST",
+            "postforentity": "POST",
+            "put": "PUT",
+            "delete": "DELETE",
+        }
+        calls: list[ConsumerHttpCall] = []
+
+        for match in REST_TEMPLATE_SIMPLE_CALL.finditer(content):
+            call = self._absolute_url_call(
+                source=source,
+                path=path,
+                target=match.group(2),
+                http_method=method_map[match.group(1).lower()],
+                raw_path=match.group(3) or "/",
+                evidence=match.group(0).strip(),
+                known_services=known_services,
+            )
+            if call is not None:
+                calls.append(call)
+
+        for match in REST_TEMPLATE_EXCHANGE.finditer(content):
+            call = self._absolute_url_call(
+                source=source,
+                path=path,
+                target=match.group(1),
+                http_method=match.group(3).upper(),
+                raw_path=match.group(2) or "/",
+                evidence=match.group(0).strip(),
+                known_services=known_services,
+            )
+            if call is not None:
+                calls.append(call)
+
+        return calls
+
+    def _absolute_url_call(
+        self,
+        source: str,
+        path: str,
+        target: str,
+        http_method: str,
+        raw_path: str,
+        evidence: str,
+        known_services: set[str],
+    ) -> ConsumerHttpCall | None:
+        if target not in known_services or target == source:
+            return None
+        return ConsumerHttpCall(
+            consumer_service=source,
+            target_service=target,
+            http_method=http_method,
+            path=self._normalize_call_path(raw_path),
+            evidence_path=path,
+            evidence=evidence,
+        )
+
+    def _extract_feign_calls(
+        self,
+        source: str,
+        path: str,
+        content: str,
+        known_services: set[str],
+    ) -> list[ConsumerHttpCall]:
+        target = self._extract_feign_target(content)
+        if target not in known_services or target == source:
+            return []
+
+        base_path = self._extract_feign_base_path(content)
+        calls: list[ConsumerHttpCall] = []
+        for match in FEIGN_METHOD_DECL.finditer(content):
+            mapping = match.group("mapping").lower()
+            args = match.group("args") or ""
+            method = self._mapping_http_method(mapping, args)
+            if method is None:
+                continue
+            method_path = self._mapping_path(args) or "/"
             calls.append(
                 ConsumerHttpCall(
                     consumer_service=source,
                     target_service=target,
-                    http_method=http_method,
-                    path=normalized_path,
+                    http_method=method,
+                    path=self._join_paths(base_path, method_path),
                     evidence_path=path,
                     evidence=match.group(0).strip(),
                 )
             )
         return calls
+
+    @classmethod
+    def _extract_feign_target(cls, content: str) -> str | None:
+        match = FEIGN_CLIENT.search(content)
+        if match is None:
+            return None
+        args = match.group("args") or ""
+        named = FEIGN_TARGET_NAMED.search(args)
+        if named:
+            return cls._literal_service_name(named.group(1))
+        first_literal = STRING_LITERAL.search(args)
+        if first_literal:
+            return cls._literal_service_name(first_literal.group(1))
+        return None
+
+    @classmethod
+    def _extract_feign_base_path(cls, content: str) -> str:
+        interface = re.search(r"\binterface\s+[A-Za-z_$][A-Za-z0-9_$]*", content)
+        if interface is None:
+            return "/"
+        prefix = content[: interface.start()]
+        mappings = list(REQUEST_MAPPING.finditer(prefix))
+        if not mappings:
+            return "/"
+        args = mappings[-1].group("args") or ""
+        return cls._mapping_path(args) or "/"
+
+    @staticmethod
+    def _mapping_http_method(mapping: str, args: str) -> str | None:
+        direct = {
+            "getmapping": "GET",
+            "postmapping": "POST",
+            "putmapping": "PUT",
+            "patchmapping": "PATCH",
+            "deletemapping": "DELETE",
+        }
+        if mapping in direct:
+            return direct[mapping]
+        request_method = REQUEST_METHOD.search(args)
+        if request_method:
+            return request_method.group(1).upper()
+        return "ANY"
+
+    @staticmethod
+    def _mapping_path(args: str) -> str | None:
+        named = MAPPING_PATH_NAMED.search(args)
+        if named:
+            return named.group(1)
+        first_literal = STRING_LITERAL.search(args)
+        if first_literal:
+            return first_literal.group(1)
+        return None
+
+    @classmethod
+    def _join_paths(cls, base: str, child: str) -> str:
+        base_norm = cls._normalize_call_path(base)
+        child_norm = cls._normalize_call_path(child)
+        if base_norm == "/":
+            return child_norm
+        if child_norm == "/":
+            return base_norm
+        return cls._normalize_call_path(base_norm + "/" + child_norm.lstrip("/"))
 
     @staticmethod
     def _normalize_call_path(path: str) -> str:
