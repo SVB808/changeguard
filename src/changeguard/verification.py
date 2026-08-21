@@ -37,7 +37,9 @@ def build_verification_plans(
         if candidate.match_level != ImpactMatchLevel.ENDPOINT:
             continue
 
-        module = graph.module_for_service(candidate.consumer_service)
+        module = candidate.consumer_module or graph.module_for_service(
+            candidate.consumer_service
+        )
         if module is None:
             continue
 
@@ -61,6 +63,7 @@ def build_verification_plans(
     return sorted(
         plans,
         key=lambda plan: (
+            plan.consumer_module,
             plan.consumer_service,
             plan.provider_service,
             plan.changed_file,
