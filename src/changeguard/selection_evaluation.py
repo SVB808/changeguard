@@ -14,7 +14,7 @@ from changeguard.synthesis import (
     EvidenceSelector,
     SynthesisGuardrailError,
     SynthesisSelection,
-    validate_selection,
+    _validate_selection as validate_selection,
 )
 
 
