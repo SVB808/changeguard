@@ -58,14 +58,27 @@ Exit criterion:
 - remote PR analysis never silently executes untrusted project build code
 
 ## V4 — Benchmark + evaluation
-- seeded regression corpus
+
+### V4.0 — REST impact policy benchmark
+- labeled `rest-impact-v1` corpus with public-PR, seeded, and synthetic cases
+- impact-detection confusion matrix: TP/FP/TN/FN, precision, recall, false-positive rate
+- endpoint-evidence confusion matrix
+- verification-plan decision accuracy
+- p50/p95 deterministic core latency
+- per-case audit output
+- explicit warning that small-corpus scores are not production accuracy claims
+
+### Later V4
+- larger seeded regression corpus across REST, security, DB, and messaging risks
 - per-risk-class precision/recall
-- false-positive rate
-- p95 latency
-- model/token cost
+- end-to-end PR latency including GitHub and JVM analysis
+- verification latency and failure attribution
+- LLM/model token and cost metrics once agent orchestration exists
+- before/after benchmark comparisons for precision-improving changes
 
 Exit criterion:
-- project has repeatable before/after benchmark numbers
+- project has repeatable, versioned benchmark numbers
+- benchmark outputs separate controlled-corpus metrics from production claims
 
 ## V5 — GitHub integration
 - GitHub App / Check output

@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 
 from changeguard.dependency_graph import ServiceDependencyGraphBuilder
+from changeguard.evaluation_cli import evaluate_cmd
 from changeguard.git_client import GitError
 from changeguard.github_client import GitHubAPIError, GitHubClient
 from changeguard.java_analyzer import JavaAnalyzerError
@@ -20,6 +21,7 @@ from changeguard.verification import (
 app = typer.Typer(
     help="ChangeGuard: deterministic change-impact evidence before AI reasoning."
 )
+app.command("evaluate")(evaluate_cmd)
 
 
 def _format_endpoint(endpoint) -> str:
