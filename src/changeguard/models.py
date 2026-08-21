@@ -119,6 +119,8 @@ class DependencyEdge(BaseModel):
     kind: DependencyKind
     evidence_path: str
     evidence: str
+    source_module: str | None = None
+    target_module: str | None = None
 
 
 class ConsumerHttpCall(BaseModel):
@@ -128,6 +130,8 @@ class ConsumerHttpCall(BaseModel):
     path: str
     evidence_path: str
     evidence: str
+    consumer_module: str | None = None
+    target_module: str | None = None
 
 
 class ServiceDependencyGraph(BaseModel):
@@ -135,7 +139,7 @@ class ServiceDependencyGraph(BaseModel):
     edges: list[DependencyEdge] = Field(default_factory=list)
     consumer_calls: list[ConsumerHttpCall] = Field(default_factory=list)
 
-    def service_for_path(self, path: str) -> str | None:
+    def node_for_path(self, path: str) -> ServiceNode | None:
         normalized = path.replace("\\", "/")
         matching = [
             node
@@ -146,16 +150,43 @@ class ServiceDependencyGraph(BaseModel):
         if not matching:
             return None
         matching.sort(key=lambda node: len(node.module_path), reverse=True)
-        return matching[0].name
+        return matching[0]
+
+    def service_for_path(self, path: str) -> str | None:
+        node = self.node_for_path(path)
+        return node.name if node is not None else None
 
     def module_for_service(self, service: str) -> str | None:
-        for node in self.nodes:
-            if node.name == service:
-                return node.module_path
-        return None
+        matching = [node.module_path for node in self.nodes if node.name == service]
+        if len(matching) != 1:
+            return None
+        return matching[0]
 
     def direct_dependents(self, service: str) -> list[str]:
         return sorted({edge.source for edge in self.edges if edge.target == service})
+
+    def direct_dependent_nodes(self, target: ServiceNode) -> list[ServiceNode]:
+        scoped_edges = [
+            edge
+            for edge in self.edges
+            if edge.target_module is not None or edge.source_module is not None
+        ]
+        if scoped_edges:
+            source_modules = {
+                edge.source_module
+                for edge in scoped_edges
+                if edge.target_module == target.module_path and edge.source_module is not None
+            }
+            return sorted(
+                [node for node in self.nodes if node.module_path in source_modules],
+                key=lambda node: (node.name, node.module_path),
+            )
+
+        names = self.direct_dependents(target.name)
+        return sorted(
+            [node for node in self.nodes if node.name in names],
+            key=lambda node: (node.name, node.module_path),
+        )
 
     def edges_between(self, source: str, target: str) -> list[DependencyEdge]:
         return [
@@ -164,12 +195,50 @@ class ServiceDependencyGraph(BaseModel):
             if edge.source == source and edge.target == target
         ]
 
+    def edges_between_nodes(
+        self,
+        source: ServiceNode,
+        target: ServiceNode,
+    ) -> list[DependencyEdge]:
+        scoped_edges = [
+            edge
+            for edge in self.edges
+            if edge.target_module is not None or edge.source_module is not None
+        ]
+        if scoped_edges:
+            return [
+                edge
+                for edge in scoped_edges
+                if edge.source_module == source.module_path
+                and edge.target_module == target.module_path
+            ]
+        return self.edges_between(source.name, target.name)
+
     def calls_between(self, consumer: str, target: str) -> list[ConsumerHttpCall]:
         return [
             call
             for call in self.consumer_calls
             if call.consumer_service == consumer and call.target_service == target
         ]
+
+    def calls_between_nodes(
+        self,
+        consumer: ServiceNode,
+        target: ServiceNode,
+    ) -> list[ConsumerHttpCall]:
+        scoped_calls = [
+            call
+            for call in self.consumer_calls
+            if call.consumer_module is not None or call.target_module is not None
+        ]
+        if scoped_calls:
+            return [
+                call
+                for call in scoped_calls
+                if call.consumer_module == consumer.module_path
+                and call.target_module == target.module_path
+            ]
+        return self.calls_between(consumer.name, target.name)
 
 
 class ImpactCandidate(BaseModel):
@@ -185,6 +254,8 @@ class ImpactCandidate(BaseModel):
     dependency_evidence: list[DependencyEdge] = Field(default_factory=list)
     consumer_call_evidence: list[ConsumerHttpCall] = Field(default_factory=list)
     suppression_reason: str | None = None
+    provider_module: str | None = None
+    consumer_module: str | None = None
 
 
 class VerificationPlan(BaseModel):
@@ -220,6 +291,7 @@ class FileChange(BaseModel):
     semantic_changes: list[EndpointSemanticChange] = Field(default_factory=list)
     security_changes: list[SecuritySemanticChange] = Field(default_factory=list)
     service: str | None = None
+    service_module: str | None = None
     direct_dependents: list[str] = Field(default_factory=list)
 
 
