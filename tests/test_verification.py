@@ -12,6 +12,7 @@ from changeguard.models import (
     VerificationStatus,
 )
 from changeguard.verification import (
+    _resolve_process_command,
     build_verification_plans,
     create_maven_module_plan,
     execute_verification_plan,
@@ -194,3 +195,28 @@ def test_verification_module_cannot_escape_workspace(tmp_path):
     assert result.status == VerificationStatus.ERROR
     assert result.error is not None
     assert "must remain inside" in result.error
+
+
+def test_windows_resolution_falls_back_to_maven_cmd_launcher():
+    looked_up = []
+
+    def fake_resolver(candidate: str) -> str | None:
+        looked_up.append(candidate)
+        if candidate == "mvn.cmd":
+            return r"C:\tools\apache-maven\bin\mvn.cmd"
+        return None
+
+    resolved = _resolve_process_command(
+        ["mvn", "-pl", "consumer", "-am", "test"],
+        platform_name="nt",
+        resolver=fake_resolver,
+    )
+
+    assert looked_up[:2] == ["mvn", "mvn.cmd"]
+    assert resolved == [
+        r"C:\tools\apache-maven\bin\mvn.cmd",
+        "-pl",
+        "consumer",
+        "-am",
+        "test",
+    ]
