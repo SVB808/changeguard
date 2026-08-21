@@ -8,8 +8,14 @@ from changeguard.dependency_graph import ServiceDependencyGraphBuilder
 from changeguard.git_client import GitError
 from changeguard.github_client import GitHubAPIError, GitHubClient
 from changeguard.java_analyzer import JavaAnalyzerError
+from changeguard.models import VerificationStatus
 from changeguard.remote_scanner import scan_pull_request
 from changeguard.scanner import scan
+from changeguard.verification import (
+    DEFAULT_TIMEOUT_SECONDS,
+    create_maven_module_plan,
+    execute_verification_plan,
+)
 
 app = typer.Typer(
     help="ChangeGuard: deterministic change-impact evidence before AI reasoning."
@@ -112,12 +118,34 @@ def _print_impact_candidates(manifest) -> None:
             _print_candidate(candidate, suppressed=True)
 
 
+def _print_verification_plans(manifest) -> None:
+    typer.echo(f"verification plans: {manifest.verification_plan_count}")
+    if not manifest.verification_plans:
+        typer.echo("  none")
+        return
+
+    for plan in manifest.verification_plans:
+        typer.echo(f"  {plan.kind.value}")
+        typer.echo(
+            f"    provider: {plan.provider_service} | consumer: {plan.consumer_service}"
+        )
+        typer.echo(f"    consumer module: {plan.consumer_module}")
+        typer.echo(f"    trigger: {plan.trigger_kind.value}")
+        if plan.endpoint is not None:
+            typer.echo("    endpoint: " + _format_endpoint(plan.endpoint))
+        typer.echo("    command: " + " ".join(plan.command))
+        typer.echo(f"    status: {plan.status.value}")
+        typer.echo(f"    reason: {plan.reason}")
+
+
 def _print_manifest(manifest, json_output: bool) -> None:
     if json_output:
         typer.echo(manifest.model_dump_json(indent=2))
         return
 
-    if manifest.impact_analysis_enabled:
+    if manifest.verification_planning_enabled:
+        version = "V3.0"
+    elif manifest.impact_analysis_enabled:
         version = "V2.2"
     elif manifest.dependency_graph is not None:
         version = "V2"
@@ -190,6 +218,10 @@ def _print_manifest(manifest, json_output: bool) -> None:
         _print_impact_candidates(manifest)
         typer.echo("")
 
+    if manifest.verification_planning_enabled:
+        _print_verification_plans(manifest)
+        typer.echo("")
+
 
 @app.command("scan")
 def scan_cmd(
@@ -246,6 +278,67 @@ def graph_cmd(
     _print_dependency_graph(graph, json_output)
 
 
+@app.command("verify")
+def verify_cmd(
+    repo: Path = typer.Option(
+        ...,
+        "--repo",
+        help="Local Maven repository workspace. This command executes project build code.",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+    ),
+    consumer: str = typer.Option(
+        ...,
+        "--consumer",
+        help="Consumer service name for the verification record.",
+    ),
+    module: str = typer.Option(
+        ...,
+        "--module",
+        help="Consumer Maven module path relative to the repository root.",
+    ),
+    timeout_seconds: int = typer.Option(
+        DEFAULT_TIMEOUT_SECONDS,
+        "--timeout",
+        min=1,
+        help="Maximum verification runtime in seconds.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON.",
+    ),
+) -> None:
+    """Explicitly run targeted Maven module tests in a local workspace."""
+    plan = create_maven_module_plan(consumer, module)
+    result = execute_verification_plan(plan, repo, timeout_seconds=timeout_seconds)
+
+    if json_output:
+        typer.echo(result.model_dump_json(indent=2))
+    else:
+        typer.echo(f"verification status: {result.status.value}")
+        typer.echo("command: " + " ".join(result.plan.command))
+        typer.echo(f"workspace: {repo.resolve()}")
+        if result.exit_code is not None:
+            typer.echo(f"exit code: {result.exit_code}")
+        if result.duration_seconds is not None:
+            typer.echo(f"duration: {result.duration_seconds:.2f}s")
+        if result.error:
+            typer.echo(f"error: {result.error}")
+        if result.stdout_tail:
+            typer.echo("stdout tail:")
+            typer.echo(result.stdout_tail)
+        if result.stderr_tail:
+            typer.echo("stderr tail:")
+            typer.echo(result.stderr_tail)
+
+    if result.status == VerificationStatus.FAILED:
+        raise typer.Exit(code=1)
+    if result.status == VerificationStatus.ERROR:
+        raise typer.Exit(code=2)
+
+
 @app.command("pr")
 def scan_pr_cmd(
     repo: str = typer.Option(
@@ -277,6 +370,15 @@ def scan_pr_cmd(
             "method+route evidence. Implies semantic and dependency analysis."
         ),
     ),
+    verification_plan: bool = typer.Option(
+        False,
+        "--verification-plan/--no-verification-plan",
+        help=(
+            "Create reviewable targeted Maven test plans for endpoint-level impact "
+            "candidates. Implies impact, semantic, and dependency analysis but does not "
+            "execute remote project code."
+        ),
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -291,6 +393,7 @@ def scan_pr_cmd(
             semantic_analysis=semantic,
             dependency_analysis=dependencies,
             impact_analysis=impacts,
+            verification_planning=verification_plan,
         )
     except GitHubAPIError as exc:
         typer.echo(f"GitHub error: {exc}", err=True)
