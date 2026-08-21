@@ -138,13 +138,14 @@ def _evidence_prompt(evidence: list[EvidenceItem]) -> str:
 
 
 def _selection_schema() -> dict[str, Any]:
+    # Keep the provider schema deliberately simple for broad Structured Outputs
+    # compatibility; ChangeGuard enforces the selection-count limit after parsing.
     return {
         "type": "object",
         "properties": {
             "selected_evidence_ids": {
                 "type": "array",
                 "items": {"type": "string"},
-                "maxItems": MAX_SELECTED_EVIDENCE,
             }
         },
         "required": ["selected_evidence_ids"],
