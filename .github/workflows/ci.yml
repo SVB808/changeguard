@@ -37,6 +37,9 @@ jobs:
       - name: Run strict benchmark regression gate
         run: changeguard evaluate --strict
 
+      - name: Run deterministic selector grounding gate
+        run: changeguard evaluate-selector --selector deterministic --runs 2 --strict
+
   ai-provider-contract:
     name: Optional AI provider contract
     runs-on: ubuntu-latest
