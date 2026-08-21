@@ -55,6 +55,17 @@ class ImpactMatchLevel(str, Enum):
     ENDPOINT = "endpoint"
 
 
+class VerificationKind(str, Enum):
+    MAVEN_MODULE_TESTS = "maven_module_tests"
+
+
+class VerificationStatus(str, Enum):
+    NOT_RUN = "NOT_RUN"
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+    ERROR = "ERROR"
+
+
 class SpringEndpoint(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -136,6 +147,12 @@ class ServiceDependencyGraph(BaseModel):
         matching.sort(key=lambda node: len(node.module_path), reverse=True)
         return matching[0].name
 
+    def module_for_service(self, service: str) -> str | None:
+        for node in self.nodes:
+            if node.name == service:
+                return node.module_path
+        return None
+
     def direct_dependents(self, service: str) -> list[str]:
         return sorted({edge.source for edge in self.edges if edge.target == service})
 
@@ -169,6 +186,29 @@ class ImpactCandidate(BaseModel):
     suppression_reason: str | None = None
 
 
+class VerificationPlan(BaseModel):
+    kind: VerificationKind = VerificationKind.MAVEN_MODULE_TESTS
+    provider_service: str
+    consumer_service: str
+    consumer_module: str
+    changed_file: str
+    trigger_kind: EndpointChangeKind
+    endpoint: SpringEndpoint | None = None
+    command: list[str]
+    reason: str
+    status: VerificationStatus = VerificationStatus.NOT_RUN
+
+
+class VerificationResult(BaseModel):
+    plan: VerificationPlan
+    status: VerificationStatus
+    exit_code: int | None = None
+    duration_seconds: float | None = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+    error: str | None = None
+
+
 class FileChange(BaseModel):
     status: ChangeStatus
     path: str
@@ -191,6 +231,8 @@ class ChangeManifest(BaseModel):
     impact_analysis_enabled: bool = False
     impact_candidates: list[ImpactCandidate] = Field(default_factory=list)
     suppressed_impact_candidates: list[ImpactCandidate] = Field(default_factory=list)
+    verification_planning_enabled: bool = False
+    verification_plans: list[VerificationPlan] = Field(default_factory=list)
 
     @property
     def changed_file_count(self) -> int:
@@ -203,3 +245,7 @@ class ChangeManifest(BaseModel):
     @property
     def suppressed_impact_candidate_count(self) -> int:
         return len(self.suppressed_impact_candidates)
+
+    @property
+    def verification_plan_count(self) -> int:
+        return len(self.verification_plans)
