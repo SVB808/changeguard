@@ -1,6 +1,7 @@
 from changeguard.github_client import GitHubChangedFile, GitHubPullRequest
 from changeguard.java_analyzer import JavaSemanticAnalysis
 from changeguard.models import (
+    ConsumerHttpCall,
     DependencyEdge,
     DependencyKind,
     EndpointChangeKind,
@@ -56,12 +57,12 @@ class FakeGraphBuilder:
         return self.graph
 
 
-def test_impact_analysis_implies_semantic_and_dependency_analysis():
+def _pull_request() -> GitHubPullRequest:
     path = (
         "spring-petclinic-customers-service/src/main/java/example/"
         "OwnerResource.java"
     )
-    pr = GitHubPullRequest(
+    return GitHubPullRequest(
         repo_full_name="acme/petclinic",
         number=13,
         base_sha="a" * 40,
@@ -74,7 +75,10 @@ def test_impact_analysis_implies_semantic_and_dependency_analysis():
             )
         ],
     )
-    graph = ServiceDependencyGraph(
+
+
+def _graph(consumer_calls: list[ConsumerHttpCall] | None = None) -> ServiceDependencyGraph:
+    return ServiceDependencyGraph(
         nodes=[
             ServiceNode(
                 name="api-gateway",
@@ -97,7 +101,13 @@ def test_impact_analysis_implies_semantic_and_dependency_analysis():
                 evidence="http://customers-service",
             )
         ],
+        consumer_calls=consumer_calls or [],
     )
+
+
+def test_impact_analysis_implies_semantic_and_dependency_analysis():
+    pr = _pull_request()
+    graph = _graph()
 
     result = scan_pull_request(
         "acme/petclinic",
@@ -117,3 +127,35 @@ def test_impact_analysis_implies_semantic_and_dependency_analysis():
     assert candidate.provider_service == "customers-service"
     assert candidate.consumer_service == "api-gateway"
     assert candidate.trigger_kind == EndpointChangeKind.ENDPOINT_REMOVED
+    assert result.suppressed_impact_candidates == []
+
+
+def test_impact_analysis_retains_non_matching_call_as_suppressed_candidate():
+    pr = _pull_request()
+    call = ConsumerHttpCall(
+        consumer_service="api-gateway",
+        target_service="customers-service",
+        http_method="POST",
+        path="/owners",
+        evidence_path=(
+            "spring-petclinic-api-gateway/src/main/java/example/"
+            "CustomersServiceClient.java"
+        ),
+        evidence='.post().uri("http://customers-service/owners")',
+    )
+    graph = _graph([call])
+
+    result = scan_pull_request(
+        "acme/petclinic",
+        13,
+        client=FakeGitHubClient(pr, "class OwnerResource {}"),
+        semantic_analyzer=FakeSemanticAnalyzer(),
+        dependency_graph_builder=FakeGraphBuilder(graph),
+        impact_analysis=True,
+    )
+
+    assert result.impact_candidates == []
+    assert len(result.suppressed_impact_candidates) == 1
+    suppressed = result.suppressed_impact_candidates[0]
+    assert suppressed.consumer_call_evidence == [call]
+    assert suppressed.suppression_reason is not None

@@ -28,7 +28,11 @@ class FakeGraphClient:
             """,
             "spring-petclinic-api-gateway/src/main/java/example/CustomersServiceClient.java": """
                 class CustomersServiceClient {
-                    String owner = "http://customers-service/owners/{ownerId}";
+                    Object getOwner(int ownerId) {
+                        return webClientBuilder.build().get()
+                            .uri("http://customers-service/owners/{ownerId}", ownerId)
+                            .retrieve();
+                    }
                 }
             """,
         }
@@ -66,6 +70,21 @@ def test_builds_graph_from_gateway_routes_and_service_urls():
         ("api-gateway", "config-server", DependencyKind.CONFIG_IMPORT),
         ("api-gateway", "customers-service", DependencyKind.SERVICE_URL),
     }
+
+
+def test_extracts_literal_consumer_http_method_and_route():
+    graph = ServiceDependencyGraphBuilder(client=FakeGraphClient()).build(
+        "acme/petclinic",
+        "abc123",
+    )
+
+    assert len(graph.consumer_calls) == 1
+    call = graph.consumer_calls[0]
+    assert call.consumer_service == "api-gateway"
+    assert call.target_service == "customers-service"
+    assert call.http_method == "GET"
+    assert call.path == "/owners/{ownerId}"
+    assert call.evidence_path.endswith("CustomersServiceClient.java")
 
 
 def test_resolves_service_ownership_and_direct_dependents():

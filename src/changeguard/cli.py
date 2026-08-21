@@ -46,41 +46,70 @@ def _print_dependency_graph(graph, json_output: bool) -> None:
         return
 
     typer.echo(
-        f"services: {len(graph.nodes)} | dependency edges: {len(graph.edges)}"
+        f"services: {len(graph.nodes)} | dependency edges: {len(graph.edges)} | "
+        f"explicit consumer calls: {len(graph.consumer_calls)}"
     )
     typer.echo("")
     for edge in graph.edges:
-        typer.echo(
-            f"{edge.source} -> {edge.target} [{edge.kind.value}]"
-        )
+        typer.echo(f"{edge.source} -> {edge.target} [{edge.kind.value}]")
         typer.echo(f"  evidence: {edge.evidence_path} | {edge.evidence}")
+
+    if graph.consumer_calls:
+        typer.echo("")
+        typer.echo("explicit consumer calls:")
+        for call in graph.consumer_calls:
+            typer.echo(
+                f"{call.consumer_service} -> {call.target_service} "
+                f"{call.http_method} {call.path}"
+            )
+            typer.echo(f"  evidence: {call.evidence_path}")
+
+
+def _print_candidate(candidate, suppressed: bool = False) -> None:
+    typer.echo(f"  {candidate.kind.value}")
+    typer.echo(
+        f"    provider: {candidate.provider_service} | "
+        f"consumer: {candidate.consumer_service}"
+    )
+    typer.echo(f"    changed file: {candidate.changed_file}")
+    typer.echo(f"    trigger: {candidate.trigger_kind.value}")
+    if candidate.before is not None:
+        typer.echo("    before: " + _format_endpoint(candidate.before))
+    if candidate.after is not None:
+        typer.echo("    after:  " + _format_endpoint(candidate.after))
+    typer.echo(f"    match level: {candidate.match_level.value}")
+    typer.echo(f"    reason: {candidate.reason}")
+    for edge in candidate.dependency_evidence:
+        typer.echo(
+            f"    dependency evidence: [{edge.kind.value}] "
+            f"{edge.evidence_path} | {edge.evidence}"
+        )
+    for call in candidate.consumer_call_evidence:
+        typer.echo(
+            f"    consumer call: {call.http_method} {call.path} | "
+            f"{call.evidence_path}"
+        )
+    if suppressed and candidate.suppression_reason:
+        typer.echo(f"    suppression: {candidate.suppression_reason}")
 
 
 def _print_impact_candidates(manifest) -> None:
     typer.echo(f"impact candidates: {manifest.impact_candidate_count}")
     if not manifest.impact_candidates:
         typer.echo("  none")
-        return
+    else:
+        for candidate in manifest.impact_candidates:
+            _print_candidate(candidate)
 
-    for candidate in manifest.impact_candidates:
-        typer.echo(f"  {candidate.kind.value}")
-        typer.echo(
-            f"    provider: {candidate.provider_service} | "
-            f"consumer: {candidate.consumer_service}"
-        )
-        typer.echo(f"    changed file: {candidate.changed_file}")
-        typer.echo(f"    trigger: {candidate.trigger_kind.value}")
-        if candidate.before is not None:
-            typer.echo("    before: " + _format_endpoint(candidate.before))
-        if candidate.after is not None:
-            typer.echo("    after:  " + _format_endpoint(candidate.after))
-        typer.echo(f"    match level: {candidate.match_level.value}")
-        typer.echo(f"    reason: {candidate.reason}")
-        for edge in candidate.dependency_evidence:
-            typer.echo(
-                f"    dependency evidence: [{edge.kind.value}] "
-                f"{edge.evidence_path} | {edge.evidence}"
-            )
+    typer.echo(
+        f"suppressed service-level candidates: "
+        f"{manifest.suppressed_impact_candidate_count}"
+    )
+    if not manifest.suppressed_impact_candidates:
+        typer.echo("  none")
+    else:
+        for candidate in manifest.suppressed_impact_candidates:
+            _print_candidate(candidate, suppressed=True)
 
 
 def _print_manifest(manifest, json_output: bool) -> None:
@@ -89,7 +118,7 @@ def _print_manifest(manifest, json_output: bool) -> None:
         return
 
     if manifest.impact_analysis_enabled:
-        version = "V2.1"
+        version = "V2.2"
     elif manifest.dependency_graph is not None:
         version = "V2"
     else:
@@ -104,7 +133,8 @@ def _print_manifest(manifest, json_output: bool) -> None:
         typer.echo(
             "dependency graph: "
             f"{len(manifest.dependency_graph.nodes)} service(s), "
-            f"{len(manifest.dependency_graph.edges)} edge(s)"
+            f"{len(manifest.dependency_graph.edges)} edge(s), "
+            f"{len(manifest.dependency_graph.consumer_calls)} explicit call(s)"
         )
     typer.echo("")
 
@@ -206,7 +236,7 @@ def graph_cmd(
         help="Emit machine-readable JSON.",
     ),
 ) -> None:
-    """Build a deterministic service dependency graph from repository evidence."""
+    """Build deterministic service dependency and HTTP call-site evidence."""
     try:
         graph = ServiceDependencyGraphBuilder(client=GitHubClient()).build(repo, ref)
     except GitHubAPIError as exc:
@@ -243,9 +273,8 @@ def scan_pr_cmd(
         False,
         "--impacts/--no-impacts",
         help=(
-            "Generate service-level impact candidates by joining compatibility-sensitive "
-            "endpoint changes with direct dependency evidence. Implies semantic and "
-            "dependency analysis."
+            "Generate impact candidates and refine them with explicit consumer HTTP "
+            "method+route evidence. Implies semantic and dependency analysis."
         ),
     ),
     json_output: bool = typer.Option(

@@ -4,6 +4,7 @@ import re
 
 from changeguard.github_client import GitHubClient
 from changeguard.models import (
+    ConsumerHttpCall,
     DependencyEdge,
     DependencyKind,
     ServiceDependencyGraph,
@@ -22,16 +23,25 @@ CLIENT_SOURCE_PATH = re.compile(
 )
 LB_URI = re.compile(r"\blb://([A-Za-z0-9_.-]+)")
 HTTP_HOST = re.compile(r"\bhttps?://([A-Za-z0-9_.-]+)(?::\d+)?")
+EXPLICIT_HTTP_CALL = re.compile(
+    r"\.(get|post|put|patch|delete)\s*\(\s*\)\s*"
+    r"\.uri\s*\(\s*\"https?://([A-Za-z0-9_.-]+)(?::\d+)?([^\"?#]*)"
+    r"(?:\?[^\"#]*)?\"",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class ServiceDependencyGraphBuilder:
-    """Build a small deterministic cross-service graph from repository evidence.
+    """Build deterministic cross-service dependency and call-site evidence.
 
-    V2 intentionally starts with high-confidence evidence sources instead of trying
-    to understand every possible Java HTTP client pattern:
+    V2 starts with high-confidence service dependency evidence:
     - Spring Cloud Gateway `lb://service` routes
     - explicit service URLs in application configuration
     - explicit service URLs in Java classes named Client/Gateway/Connector
+
+    V2.2 additionally extracts literal HTTP call sites such as
+    `.get().uri("http://customers-service/owners/{ownerId}", ownerId)`.
+    Dynamic URI construction is intentionally left unresolved rather than guessed.
     """
 
     def __init__(self, client: GitHubClient | None = None) -> None:
@@ -42,9 +52,12 @@ class ServiceDependencyGraphBuilder:
         nodes = self._discover_nodes(paths)
         known_services = {node.name for node in nodes}
         edges: list[DependencyEdge] = []
+        consumer_calls: list[ConsumerHttpCall] = []
 
         for path in paths:
-            if not (CONFIG_PATH.search(path) or CLIENT_SOURCE_PATH.search(path)):
+            is_config = bool(CONFIG_PATH.search(path))
+            is_client_source = bool(CLIENT_SOURCE_PATH.search(path))
+            if not (is_config or is_client_source):
                 continue
 
             source = self._service_for_path(nodes, path)
@@ -63,10 +76,20 @@ class ServiceDependencyGraphBuilder:
                     known_services=known_services,
                 )
             )
+            if is_client_source:
+                consumer_calls.extend(
+                    self._extract_consumer_calls(
+                        source=source,
+                        path=path,
+                        content=content,
+                        known_services=known_services,
+                    )
+                )
 
         return ServiceDependencyGraph(
             nodes=nodes,
             edges=self._dedupe_edges(edges),
+            consumer_calls=self._dedupe_calls(consumer_calls),
         )
 
     def _discover_nodes(self, paths: list[str]) -> list[ServiceNode]:
@@ -129,6 +152,43 @@ class ServiceDependencyGraphBuilder:
 
         return edges
 
+    def _extract_consumer_calls(
+        self,
+        source: str,
+        path: str,
+        content: str,
+        known_services: set[str],
+    ) -> list[ConsumerHttpCall]:
+        calls: list[ConsumerHttpCall] = []
+        for match in EXPLICIT_HTTP_CALL.finditer(content):
+            http_method = match.group(1).upper()
+            target = match.group(2)
+            if target not in known_services or target == source:
+                continue
+
+            raw_path = match.group(3) or "/"
+            normalized_path = self._normalize_call_path(raw_path)
+            calls.append(
+                ConsumerHttpCall(
+                    consumer_service=source,
+                    target_service=target,
+                    http_method=http_method,
+                    path=normalized_path,
+                    evidence_path=path,
+                    evidence=match.group(0).strip(),
+                )
+            )
+        return calls
+
+    @staticmethod
+    def _normalize_call_path(path: str) -> str:
+        if not path:
+            return "/"
+        normalized = "/" + path.lstrip("/")
+        if len(normalized) > 1:
+            normalized = normalized.rstrip("/")
+        return normalized
+
     @staticmethod
     def _service_for_path(nodes: list[ServiceNode], path: str) -> str | None:
         normalized = path.replace("\\", "/")
@@ -156,5 +216,28 @@ class ServiceDependencyGraphBuilder:
                 edge.target,
                 edge.kind.value,
                 edge.evidence_path,
+            ),
+        )
+
+    @staticmethod
+    def _dedupe_calls(calls: list[ConsumerHttpCall]) -> list[ConsumerHttpCall]:
+        unique: dict[tuple[str, str, str, str, str], ConsumerHttpCall] = {}
+        for call in calls:
+            key = (
+                call.consumer_service,
+                call.target_service,
+                call.http_method,
+                call.path,
+                call.evidence_path,
+            )
+            unique[key] = call
+        return sorted(
+            unique.values(),
+            key=lambda call: (
+                call.consumer_service,
+                call.target_service,
+                call.http_method,
+                call.path,
+                call.evidence_path,
             ),
         )
