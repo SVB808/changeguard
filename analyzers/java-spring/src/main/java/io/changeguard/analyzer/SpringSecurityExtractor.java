@@ -1,6 +1,5 @@
 package io.changeguard.analyzer;
 
-import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.expr.Expression;
@@ -46,7 +45,7 @@ public final class SpringSecurityExtractor {
             return List.of();
         }
 
-        CompilationUnit unit = StaticJavaParser.parse(source);
+        CompilationUnit unit = JavaSourceParser.parse(source);
         List<SecurityPolicy> policies = new ArrayList<>();
 
         for (MethodDeclaration method : unit.findAll(MethodDeclaration.class)) {
