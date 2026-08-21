@@ -80,12 +80,10 @@ REQUEST_METHOD = re.compile(
 class ServiceDependencyGraphBuilder:
     """Build deterministic cross-service dependency and call-site evidence.
 
-    Service discovery is repository-agnostic for Maven monorepos. Maven module
-    directories come from repository `pom.xml` paths. A literal
-    `spring.application.name` in `application*.yml|yaml|properties` is preferred as
-    service identity. When no literal name exists, the module basename is used, with
-    a conservative sibling-prefix fallback for conventional `*-service`, `*-server`,
-    and `*-gateway` module groups.
+    Logical service names are kept for readable output, while Maven module paths are
+    used as repository-local identity for graph joins. This avoids conflating two
+    modules that legitimately reuse the same `spring.application.name` in separate
+    monorepo workspaces.
 
     High-confidence dependency evidence currently includes:
     - Spring Cloud Gateway `lb://service` routes
@@ -113,7 +111,6 @@ class ServiceDependencyGraphBuilder:
             return content_cache[path]
 
         nodes = self._discover_nodes(paths, read_text)
-        known_services = {node.name for node in nodes}
         edges: list[DependencyEdge] = []
         consumer_calls: list[ConsumerHttpCall] = []
 
@@ -123,8 +120,8 @@ class ServiceDependencyGraphBuilder:
             if not (is_config or is_client_source):
                 continue
 
-            source = self._service_for_path(nodes, path)
-            if source is None:
+            source_node = self._node_for_path(nodes, path)
+            if source_node is None:
                 continue
 
             content = read_text(path)
@@ -133,19 +130,19 @@ class ServiceDependencyGraphBuilder:
 
             edges.extend(
                 self._extract_edges(
-                    source=source,
+                    source_node=source_node,
                     path=path,
                     content=content,
-                    known_services=known_services,
+                    nodes=nodes,
                 )
             )
             if is_client_source:
                 consumer_calls.extend(
                     self._extract_consumer_calls(
-                        source=source,
+                        source_node=source_node,
                         path=path,
                         content=content,
-                        known_services=known_services,
+                        nodes=nodes,
                     )
                 )
 
@@ -340,97 +337,107 @@ class ServiceDependencyGraphBuilder:
 
     def _extract_edges(
         self,
-        source: str,
+        source_node: ServiceNode,
         path: str,
         content: str,
-        known_services: set[str],
+        nodes: list[ServiceNode],
     ) -> list[DependencyEdge]:
         edges: list[DependencyEdge] = []
 
         for match in LB_URI.finditer(content):
-            target = match.group(1)
-            if target not in known_services or target == source:
+            target_node = self._resolve_target_node(nodes, source_node, match.group(1))
+            if target_node is None:
                 continue
             edges.append(
-                DependencyEdge(
-                    source=source,
-                    target=target,
-                    kind=DependencyKind.GATEWAY_ROUTE,
-                    evidence_path=path,
-                    evidence=match.group(0),
+                self._edge(
+                    source_node,
+                    target_node,
+                    DependencyKind.GATEWAY_ROUTE,
+                    path,
+                    match.group(0),
                 )
             )
 
         for match in HTTP_HOST.finditer(content):
-            target = match.group(1)
-            if target not in known_services or target == source:
+            target_node = self._resolve_target_node(nodes, source_node, match.group(1))
+            if target_node is None:
                 continue
 
             kind = (
                 DependencyKind.CONFIG_IMPORT
-                if target == "config-server" and "configserver:" in content
+                if target_node.name == "config-server" and "configserver:" in content
                 else DependencyKind.SERVICE_URL
             )
             edges.append(
-                DependencyEdge(
-                    source=source,
-                    target=target,
-                    kind=kind,
-                    evidence_path=path,
-                    evidence=match.group(0),
-                )
+                self._edge(source_node, target_node, kind, path, match.group(0))
             )
 
         feign_target = self._extract_feign_target(content)
-        if feign_target in known_services and feign_target != source:
-            match = FEIGN_CLIENT.search(content)
-            assert match is not None
-            edges.append(
-                DependencyEdge(
-                    source=source,
-                    target=feign_target,
-                    kind=DependencyKind.DECLARATIVE_CLIENT,
-                    evidence_path=path,
-                    evidence=match.group(0).strip(),
+        if feign_target is not None:
+            target_node = self._resolve_target_node(nodes, source_node, feign_target)
+            if target_node is not None:
+                match = FEIGN_CLIENT.search(content)
+                assert match is not None
+                edges.append(
+                    self._edge(
+                        source_node,
+                        target_node,
+                        DependencyKind.DECLARATIVE_CLIENT,
+                        path,
+                        match.group(0).strip(),
+                    )
                 )
-            )
 
         return edges
 
+    @staticmethod
+    def _edge(
+        source_node: ServiceNode,
+        target_node: ServiceNode,
+        kind: DependencyKind,
+        path: str,
+        evidence: str,
+    ) -> DependencyEdge:
+        return DependencyEdge(
+            source=source_node.name,
+            target=target_node.name,
+            source_module=source_node.module_path,
+            target_module=target_node.module_path,
+            kind=kind,
+            evidence_path=path,
+            evidence=evidence,
+        )
+
     def _extract_consumer_calls(
         self,
-        source: str,
+        source_node: ServiceNode,
         path: str,
         content: str,
-        known_services: set[str],
+        nodes: list[ServiceNode],
     ) -> list[ConsumerHttpCall]:
         calls: list[ConsumerHttpCall] = []
-        calls.extend(
-            self._extract_webclient_calls(source, path, content, known_services)
-        )
-        calls.extend(
-            self._extract_resttemplate_calls(source, path, content, known_services)
-        )
-        calls.extend(self._extract_feign_calls(source, path, content, known_services))
+        calls.extend(self._extract_webclient_calls(source_node, path, content, nodes))
+        calls.extend(self._extract_resttemplate_calls(source_node, path, content, nodes))
+        calls.extend(self._extract_feign_calls(source_node, path, content, nodes))
         return calls
 
     def _extract_webclient_calls(
         self,
-        source: str,
+        source_node: ServiceNode,
         path: str,
         content: str,
-        known_services: set[str],
+        nodes: list[ServiceNode],
     ) -> list[ConsumerHttpCall]:
         calls: list[ConsumerHttpCall] = []
         for match in EXPLICIT_HTTP_CALL.finditer(content):
             call = self._absolute_url_call(
-                source=source,
+                source_node=source_node,
                 path=path,
-                target=match.group(2),
+                target_name=match.group(2),
                 http_method=match.group(1).upper(),
                 raw_path=match.group(3) or "/",
                 evidence=match.group(0).strip(),
-                known_services=known_services,
+                nodes=nodes,
             )
             if call is not None:
                 calls.append(call)
@@ -438,10 +445,10 @@ class ServiceDependencyGraphBuilder:
 
     def _extract_resttemplate_calls(
         self,
-        source: str,
+        source_node: ServiceNode,
         path: str,
         content: str,
-        known_services: set[str],
+        nodes: list[ServiceNode],
     ) -> list[ConsumerHttpCall]:
         method_map = {
             "getforobject": "GET",
@@ -455,26 +462,26 @@ class ServiceDependencyGraphBuilder:
 
         for match in REST_TEMPLATE_SIMPLE_CALL.finditer(content):
             call = self._absolute_url_call(
-                source=source,
+                source_node=source_node,
                 path=path,
-                target=match.group(2),
+                target_name=match.group(2),
                 http_method=method_map[match.group(1).lower()],
                 raw_path=match.group(3) or "/",
                 evidence=match.group(0).strip(),
-                known_services=known_services,
+                nodes=nodes,
             )
             if call is not None:
                 calls.append(call)
 
         for match in REST_TEMPLATE_EXCHANGE.finditer(content):
             call = self._absolute_url_call(
-                source=source,
+                source_node=source_node,
                 path=path,
-                target=match.group(1),
+                target_name=match.group(1),
                 http_method=match.group(3).upper(),
                 raw_path=match.group(2) or "/",
                 evidence=match.group(0).strip(),
-                known_services=known_services,
+                nodes=nodes,
             )
             if call is not None:
                 calls.append(call)
@@ -483,19 +490,22 @@ class ServiceDependencyGraphBuilder:
 
     def _absolute_url_call(
         self,
-        source: str,
+        source_node: ServiceNode,
         path: str,
-        target: str,
+        target_name: str,
         http_method: str,
         raw_path: str,
         evidence: str,
-        known_services: set[str],
+        nodes: list[ServiceNode],
     ) -> ConsumerHttpCall | None:
-        if target not in known_services or target == source:
+        target_node = self._resolve_target_node(nodes, source_node, target_name)
+        if target_node is None:
             return None
         return ConsumerHttpCall(
-            consumer_service=source,
-            target_service=target,
+            consumer_service=source_node.name,
+            target_service=target_node.name,
+            consumer_module=source_node.module_path,
+            target_module=target_node.module_path,
             http_method=http_method,
             path=self._normalize_call_path(raw_path),
             evidence_path=path,
@@ -504,13 +514,16 @@ class ServiceDependencyGraphBuilder:
 
     def _extract_feign_calls(
         self,
-        source: str,
+        source_node: ServiceNode,
         path: str,
         content: str,
-        known_services: set[str],
+        nodes: list[ServiceNode],
     ) -> list[ConsumerHttpCall]:
-        target = self._extract_feign_target(content)
-        if target not in known_services or target == source:
+        target_name = self._extract_feign_target(content)
+        if target_name is None:
+            return []
+        target_node = self._resolve_target_node(nodes, source_node, target_name)
+        if target_node is None:
             return []
 
         base_path = self._extract_feign_base_path(content)
@@ -524,8 +537,10 @@ class ServiceDependencyGraphBuilder:
             method_path = self._mapping_path(args) or "/"
             calls.append(
                 ConsumerHttpCall(
-                    consumer_service=source,
-                    target_service=target,
+                    consumer_service=source_node.name,
+                    target_service=target_node.name,
+                    consumer_module=source_node.module_path,
+                    target_module=target_node.module_path,
                     http_method=method,
                     path=self._join_paths(base_path, method_path),
                     evidence_path=path,
@@ -618,18 +633,63 @@ class ServiceDependencyGraphBuilder:
         return max(matching, key=len)
 
     @classmethod
-    def _service_for_path(cls, nodes: list[ServiceNode], path: str) -> str | None:
+    def _node_for_path(cls, nodes: list[ServiceNode], path: str) -> ServiceNode | None:
         modules = [node.module_path for node in nodes]
         module = cls._module_for_path(modules, path)
         if module is None:
             return None
-        return next(node.name for node in nodes if node.module_path == module)
+        return next(node for node in nodes if node.module_path == module)
+
+    @classmethod
+    def _service_for_path(cls, nodes: list[ServiceNode], path: str) -> str | None:
+        node = cls._node_for_path(nodes, path)
+        return node.name if node is not None else None
+
+    @classmethod
+    def _resolve_target_node(
+        cls,
+        nodes: list[ServiceNode],
+        source_node: ServiceNode,
+        target_name: str,
+    ) -> ServiceNode | None:
+        candidates = [
+            node
+            for node in nodes
+            if node.name == target_name and node.module_path != source_node.module_path
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            return None
+
+        scored = [
+            (cls._common_path_depth(source_node.module_path, node.module_path), node)
+            for node in candidates
+        ]
+        best_score = max(score for score, _ in scored)
+        winners = [node for score, node in scored if score == best_score]
+        if best_score == 0 or len(winners) != 1:
+            return None
+        return winners[0]
+
+    @staticmethod
+    def _common_path_depth(left: str, right: str) -> int:
+        left_parts = left.strip("/").split("/")
+        right_parts = right.strip("/").split("/")
+        depth = 0
+        for left_part, right_part in zip(left_parts, right_parts):
+            if left_part != right_part:
+                break
+            depth += 1
+        return depth
 
     @staticmethod
     def _dedupe_edges(edges: list[DependencyEdge]) -> list[DependencyEdge]:
-        unique: dict[tuple[str, str, str, str, str], DependencyEdge] = {}
+        unique: dict[tuple[str, str, str, str, str, str, str], DependencyEdge] = {}
         for edge in edges:
             key = (
+                edge.source_module or "",
+                edge.target_module or "",
                 edge.source,
                 edge.target,
                 edge.kind.value,
@@ -640,6 +700,8 @@ class ServiceDependencyGraphBuilder:
         return sorted(
             unique.values(),
             key=lambda edge: (
+                edge.source_module or "",
+                edge.target_module or "",
                 edge.source,
                 edge.target,
                 edge.kind.value,
@@ -649,9 +711,11 @@ class ServiceDependencyGraphBuilder:
 
     @staticmethod
     def _dedupe_calls(calls: list[ConsumerHttpCall]) -> list[ConsumerHttpCall]:
-        unique: dict[tuple[str, str, str, str, str], ConsumerHttpCall] = {}
+        unique: dict[tuple[str, str, str, str, str, str, str], ConsumerHttpCall] = {}
         for call in calls:
             key = (
+                call.consumer_module or "",
+                call.target_module or "",
                 call.consumer_service,
                 call.target_service,
                 call.http_method,
@@ -662,6 +726,8 @@ class ServiceDependencyGraphBuilder:
         return sorted(
             unique.values(),
             key=lambda call: (
+                call.consumer_module or "",
+                call.target_module or "",
                 call.consumer_service,
                 call.target_service,
                 call.http_method,

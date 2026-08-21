@@ -9,6 +9,7 @@ from changeguard.models import (
     ImpactCandidate,
     ImpactMatchLevel,
     ServiceDependencyGraph,
+    ServiceNode,
     SpringEndpoint,
 )
 
@@ -43,28 +44,45 @@ def generate_impact_candidates(
     files: list[FileChange],
     graph: ServiceDependencyGraph,
 ) -> list[ImpactCandidate]:
-    """Join compatibility-sensitive semantic changes with service dependencies."""
+    """Join compatibility-sensitive semantic changes with module-scoped dependencies."""
     candidates: list[ImpactCandidate] = []
 
     for file in files:
-        provider = file.service or graph.service_for_path(file.path)
+        provider_node = graph.node_for_path(file.path)
+        provider = file.service or (provider_node.name if provider_node is not None else None)
         if provider is None:
             continue
+
+        if provider_node is None:
+            provider_module = file.service_module
+            dependent_nodes = [
+                node
+                for node in graph.nodes
+                if node.name in graph.direct_dependents(provider)
+            ]
+        else:
+            provider_module = provider_node.module_path
+            dependent_nodes = graph.direct_dependent_nodes(provider_node)
 
         for semantic_change in file.semantic_changes:
             reason = COMPATIBILITY_SENSITIVE_ENDPOINT_CHANGES.get(semantic_change.kind)
             if reason is None:
                 continue
 
-            for consumer in graph.direct_dependents(provider):
-                evidence = graph.edges_between(consumer, provider)
+            for consumer_node in dependent_nodes:
+                if provider_node is not None:
+                    evidence = graph.edges_between_nodes(consumer_node, provider_node)
+                else:
+                    evidence = graph.edges_between(consumer_node.name, provider)
                 if not evidence:
                     continue
 
                 candidates.append(
                     ImpactCandidate(
                         provider_service=provider,
-                        consumer_service=consumer,
+                        consumer_service=consumer_node.name,
+                        provider_module=provider_module,
+                        consumer_module=consumer_node.module_path,
                         changed_file=file.path,
                         trigger_kind=semantic_change.kind,
                         before=semantic_change.before,
@@ -83,19 +101,24 @@ def refine_impact_candidates(
 ) -> tuple[list[ImpactCandidate], list[ImpactCandidate]]:
     """Use explicit consumer call sites to upgrade or suppress service-level candidates.
 
-    No parsed calls means the service-level candidate remains active. When literal calls
-    do exist for the consumer/provider pair, a compatible method+route match upgrades the
-    candidate to endpoint scope. If none match, the candidate is suppressed but retained
-    separately so the decision remains auditable.
+    Module paths are preferred for joins so duplicate logical service names in separate
+    Maven workspaces cannot contaminate each other's call evidence. Legacy name-only
+    graphs still fall back to their original behavior.
     """
     active: list[ImpactCandidate] = []
     suppressed: list[ImpactCandidate] = []
 
     for candidate in candidates:
-        calls = graph.calls_between(
-            candidate.consumer_service,
-            candidate.provider_service,
-        )
+        provider_node = _node_for_module(graph, candidate.provider_module)
+        consumer_node = _node_for_module(graph, candidate.consumer_module)
+        if provider_node is not None and consumer_node is not None:
+            calls = graph.calls_between_nodes(consumer_node, provider_node)
+        else:
+            calls = graph.calls_between(
+                candidate.consumer_service,
+                candidate.provider_service,
+            )
+
         if not calls:
             active.append(candidate)
             continue
@@ -132,6 +155,18 @@ def refine_impact_candidates(
     return (
         sorted(active, key=_candidate_sort_key),
         sorted(suppressed, key=_candidate_sort_key),
+    )
+
+
+def _node_for_module(
+    graph: ServiceDependencyGraph,
+    module_path: str | None,
+) -> ServiceNode | None:
+    if module_path is None:
+        return None
+    return next(
+        (node for node in graph.nodes if node.module_path == module_path),
+        None,
     )
 
 
@@ -189,8 +224,10 @@ def _normalize_route(path: str) -> str:
     return route
 
 
-def _candidate_sort_key(candidate: ImpactCandidate) -> tuple[str, str, str, str, str, str]:
+def _candidate_sort_key(candidate: ImpactCandidate) -> tuple[str, str, str, str, str, str, str, str]:
     return (
+        candidate.provider_module or "",
+        candidate.consumer_module or "",
         candidate.provider_service,
         candidate.consumer_service,
         candidate.changed_file,

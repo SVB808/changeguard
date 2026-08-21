@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed after seeded multi-workspace validation.
+Accepted after seeded multi-workspace validation.
 
 ## Context
 
