@@ -84,7 +84,7 @@ def refine_impact_candidates(
     """Use explicit consumer call sites to upgrade or suppress service-level candidates.
 
     No parsed calls means the service-level candidate remains active. When literal calls
-    do exist for the consumer/provider pair, an exact method+route match upgrades the
+    do exist for the consumer/provider pair, a compatible method+route match upgrades the
     candidate to endpoint scope. If none match, the candidate is suppressed but retained
     separately so the decision remains auditable.
     """
@@ -140,7 +140,45 @@ def _call_matches_endpoint(call: ConsumerHttpCall, endpoint: SpringEndpoint) -> 
         endpoint.http_method == "ANY"
         or call.http_method.upper() == endpoint.http_method.upper()
     )
-    return method_matches and _normalize_route(call.path) == _normalize_route(endpoint.path)
+    return method_matches and _route_matches(call.path, endpoint.path)
+
+
+def _route_matches(call_path: str, endpoint_path: str) -> bool:
+    """Match a consumer route against a Spring endpoint path deterministically.
+
+    Path-variable names are treated structurally, query strings are ignored for routing,
+    and Spring-style `*`/`**` path wildcards are supported. We intentionally do not try
+    to interpret arbitrary regex constraints inside path-variable declarations yet.
+    """
+    call_route = _normalize_route(call_path)
+    endpoint_route = _normalize_route(endpoint_path)
+
+    pattern_parts: list[str] = []
+    index = 0
+    while index < len(endpoint_route):
+        char = endpoint_route[index]
+
+        if char == "{":
+            closing = endpoint_route.find("}", index + 1)
+            if closing != -1:
+                pattern_parts.append(r"[^/]+")
+                index = closing + 1
+                continue
+
+        if endpoint_route.startswith("**", index):
+            pattern_parts.append(r".*")
+            index += 2
+            continue
+
+        if char == "*":
+            pattern_parts.append(r"[^/]*")
+            index += 1
+            continue
+
+        pattern_parts.append(re.escape(char))
+        index += 1
+
+    return re.fullmatch("".join(pattern_parts), call_route) is not None
 
 
 def _normalize_route(path: str) -> str:
@@ -148,7 +186,7 @@ def _normalize_route(path: str) -> str:
     route = "/" + route.lstrip("/")
     if len(route) > 1:
         route = route.rstrip("/")
-    return re.sub(r"\{[^/{}]+\}", "{}", route)
+    return route
 
 
 def _candidate_sort_key(candidate: ImpactCandidate) -> tuple[str, str, str, str, str, str]:

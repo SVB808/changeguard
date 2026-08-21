@@ -1,0 +1,333 @@
+{
+  "version": "rest-impact-v2",
+  "description": "Expanded controlled REST compatibility corpus for ChangeGuard impact disposition and verification-planning behavior. It preserves the V1 public/seeded cases and adds adversarial route-shape cases for query strings, ANY mappings, multiple observed calls, method mismatches, case sensitivity, Spring wildcards, additive changes, and missing dependencies. These metrics are benchmark-corpus metrics, not production accuracy claims.",
+  "cases": [
+    {
+      "id": "pr494_additive_health_endpoint",
+      "description": "Adding a new provider endpoint must not create a consumer impact candidate.",
+      "source": "public-pr",
+      "reference": "spring-petclinic/spring-petclinic-microservices#494",
+      "provider_service": "vets-service",
+      "consumer_service": "api-gateway",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_ADDED",
+        "after": {"method": "GET", "path": "/vets/health", "return_type": "String"}
+      },
+      "consumer_calls": [],
+      "expected": {"impact": false, "disposition": "none", "verification_plan": false}
+    },
+    {
+      "id": "pr253_post_signature_unrelated_get",
+      "description": "A POST request-signature change is suppressed when the only observed consumer call is GET on another contract.",
+      "source": "public-pr",
+      "reference": "spring-petclinic/spring-petclinic-microservices#253",
+      "provider_service": "customers-service",
+      "consumer_service": "api-gateway",
+      "dependency": true,
+      "change": {
+        "kind": "REQUEST_SIGNATURE_CHANGED",
+        "before": {"method": "POST", "path": "/owners", "parameter_types": ["Owner"], "return_type": "Owner"},
+        "after": {"method": "POST", "path": "/owners", "parameter_types": ["OwnerRequest"], "return_type": "Owner"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/owners/{ownerId}"}],
+      "expected": {"impact": false, "disposition": "suppressed", "verification_plan": false}
+    },
+    {
+      "id": "pr253_put_signature_unrelated_get",
+      "description": "A PUT request-signature change is suppressed when the observed consumer call uses GET even on the same route shape.",
+      "source": "public-pr",
+      "reference": "spring-petclinic/spring-petclinic-microservices#253",
+      "provider_service": "customers-service",
+      "consumer_service": "api-gateway",
+      "dependency": true,
+      "change": {
+        "kind": "REQUEST_SIGNATURE_CHANGED",
+        "before": {"method": "PUT", "path": "/owners/{ownerId}", "parameter_types": ["int", "Owner"], "return_type": "void"},
+        "after": {"method": "PUT", "path": "/owners/{ownerId}", "parameter_types": ["int", "OwnerRequest"], "return_type": "void"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/owners/{ownerId}"}],
+      "expected": {"impact": false, "disposition": "suppressed", "verification_plan": false}
+    },
+    {
+      "id": "seeded_path_break_exact_call",
+      "description": "The seeded path break must produce endpoint-level impact evidence and a verification plan.",
+      "source": "seeded-pr",
+      "reference": "SVB808/changeguard#9",
+      "provider_service": "provider-service",
+      "consumer_service": "consumer-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_PATH_CHANGED",
+        "before": {"method": "GET", "path": "/owners/{ownerId}", "parameter_types": ["int"], "return_type": "String"},
+        "after": {"method": "GET", "path": "/customers/{ownerId}", "parameter_types": ["int"], "return_type": "String"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/owners/{id}"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "method_change_exact_old_call",
+      "description": "A consumer still using the old HTTP method should produce endpoint-level impact evidence.",
+      "source": "synthetic",
+      "provider_service": "orders-service",
+      "consumer_service": "checkout-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_METHOD_CHANGED",
+        "before": {"method": "GET", "path": "/orders/{orderId}", "return_type": "Order"},
+        "after": {"method": "POST", "path": "/orders/{orderId}", "return_type": "Order"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/orders/{id}"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "removed_endpoint_exact_call",
+      "description": "Removing an endpoint still called by a consumer should produce endpoint-level impact evidence.",
+      "source": "synthetic",
+      "provider_service": "profile-service",
+      "consumer_service": "web-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "DELETE", "path": "/profiles/{profileId}", "return_type": "void"}
+      },
+      "consumer_calls": [{"method": "DELETE", "path": "/profiles/{id}"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "response_type_change_exact_call",
+      "description": "A response type change on an endpoint used by a consumer should remain an endpoint-level compatibility candidate.",
+      "source": "synthetic",
+      "provider_service": "catalog-service",
+      "consumer_service": "search-service",
+      "dependency": true,
+      "change": {
+        "kind": "RESPONSE_TYPE_CHANGED",
+        "before": {"method": "GET", "path": "/products/{productId}", "return_type": "Product"},
+        "after": {"method": "GET", "path": "/products/{productId}", "return_type": "ProductSummary"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/products/{id}"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "request_signature_exact_post_call",
+      "description": "A request-signature change with an exact POST call should create endpoint-level verification work.",
+      "source": "synthetic",
+      "provider_service": "payments-service",
+      "consumer_service": "checkout-service",
+      "dependency": true,
+      "change": {
+        "kind": "REQUEST_SIGNATURE_CHANGED",
+        "before": {"method": "POST", "path": "/payments", "parameter_types": ["PaymentRequest"], "return_type": "Payment"},
+        "after": {"method": "POST", "path": "/payments", "parameter_types": ["PaymentV2Request"], "return_type": "Payment"}
+      },
+      "consumer_calls": [{"method": "POST", "path": "/payments"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "dynamic_unparsed_consumer_call",
+      "description": "With service dependency evidence but no parseable call site, ChangeGuard must remain conservative at service scope.",
+      "source": "synthetic",
+      "provider_service": "inventory-service",
+      "consumer_service": "orders-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/inventory/{sku}", "return_type": "Inventory"}
+      },
+      "consumer_calls": [],
+      "expected": {"impact": true, "disposition": "service", "verification_plan": false}
+    },
+    {
+      "id": "unrelated_explicit_route",
+      "description": "Concrete calls to a different route on the same provider should suppress the coarse service candidate.",
+      "source": "synthetic",
+      "provider_service": "owners-service",
+      "consumer_service": "portal-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/owners/{ownerId}", "return_type": "Owner"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/pets/{petId}"}],
+      "expected": {"impact": false, "disposition": "suppressed", "verification_plan": false}
+    },
+    {
+      "id": "breaking_change_without_dependency",
+      "description": "A compatibility-sensitive provider change with no known consumer dependency should not create an impact candidate for this consumer.",
+      "source": "synthetic",
+      "provider_service": "billing-service",
+      "consumer_service": "analytics-service",
+      "dependency": false,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/invoices/{invoiceId}", "return_type": "Invoice"}
+      },
+      "consumer_calls": [],
+      "expected": {"impact": false, "disposition": "none", "verification_plan": false}
+    },
+    {
+      "id": "query_string_exact_call",
+      "description": "Query parameters do not change the routed endpoint path, so an exact method/path template should still match.",
+      "source": "synthetic",
+      "provider_service": "orders-service",
+      "consumer_service": "portal-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/orders/{orderId}", "return_type": "Order"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/orders/{id}?expand=items"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "any_method_mapping_post_consumer",
+      "description": "A provider mapping that accepts any HTTP method should match a concrete POST consumer call on the same route.",
+      "source": "synthetic",
+      "provider_service": "events-service",
+      "consumer_service": "automation-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "ANY", "path": "/events/{eventId}", "return_type": "Event"}
+      },
+      "consumer_calls": [{"method": "POST", "path": "/events/{id}"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "multiple_calls_one_exact",
+      "description": "When several calls to the provider are observed, one exact old-contract match is enough to retain endpoint-level impact evidence.",
+      "source": "synthetic",
+      "provider_service": "accounts-service",
+      "consumer_service": "dashboard-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_PATH_CHANGED",
+        "before": {"method": "GET", "path": "/accounts/{accountId}", "return_type": "Account"},
+        "after": {"method": "GET", "path": "/customers/{accountId}", "return_type": "Account"}
+      },
+      "consumer_calls": [
+        {"method": "GET", "path": "/accounts/search"},
+        {"method": "GET", "path": "/accounts/{id}"}
+      ],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "same_route_wrong_method",
+      "description": "The same route shape with a different concrete HTTP method is not an exact consumer match.",
+      "source": "synthetic",
+      "provider_service": "orders-service",
+      "consumer_service": "reporting-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "DELETE", "path": "/orders/{orderId}", "return_type": "void"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/orders/{id}"}],
+      "expected": {"impact": false, "disposition": "suppressed", "verification_plan": false}
+    },
+    {
+      "id": "case_sensitive_route_mismatch",
+      "description": "Spring route matching is case-sensitive by default, so differently cased literal paths should not be treated as the same endpoint.",
+      "source": "synthetic",
+      "provider_service": "catalog-service",
+      "consumer_service": "portal-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/Products/{productId}", "return_type": "Product"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/products/{id}"}],
+      "expected": {"impact": false, "disposition": "suppressed", "verification_plan": false}
+    },
+    {
+      "id": "recursive_wildcard_nested_call",
+      "description": "A Spring-style recursive wildcard endpoint should match a nested concrete consumer route below that prefix.",
+      "source": "synthetic",
+      "provider_service": "files-service",
+      "consumer_service": "reporting-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/files/**", "return_type": "FileResource"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/files/reports/2026/summary"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "single_wildcard_one_segment",
+      "description": "A single Spring-style wildcard should match within one path segment.",
+      "source": "synthetic",
+      "provider_service": "files-service",
+      "consumer_service": "metadata-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/files/*/metadata", "return_type": "Metadata"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/files/latest/metadata"}],
+      "expected": {"impact": true, "disposition": "endpoint", "verification_plan": true}
+    },
+    {
+      "id": "single_wildcard_crosses_segments",
+      "description": "A single wildcard must not match across multiple slash-delimited path segments.",
+      "source": "synthetic",
+      "provider_service": "files-service",
+      "consumer_service": "metadata-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_REMOVED",
+        "before": {"method": "GET", "path": "/files/*/metadata", "return_type": "Metadata"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/files/a/b/metadata"}],
+      "expected": {"impact": false, "disposition": "suppressed", "verification_plan": false}
+    },
+    {
+      "id": "additive_endpoint_existing_call",
+      "description": "An endpoint addition is not compatibility-sensitive even if the consumer already has a call with the same route shape.",
+      "source": "synthetic",
+      "provider_service": "search-service",
+      "consumer_service": "portal-service",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_ADDED",
+        "after": {"method": "GET", "path": "/search", "return_type": "Results"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/search"}],
+      "expected": {"impact": false, "disposition": "none", "verification_plan": false}
+    },
+    {
+      "id": "path_change_no_dependency_exact_call",
+      "description": "A call-like fact without a known service dependency is insufficient to create a cross-service impact candidate.",
+      "source": "synthetic",
+      "provider_service": "shipping-service",
+      "consumer_service": "checkout-service",
+      "dependency": false,
+      "change": {
+        "kind": "ENDPOINT_PATH_CHANGED",
+        "before": {"method": "GET", "path": "/shipping/{id}", "return_type": "Shipment"},
+        "after": {"method": "GET", "path": "/shipments/{id}", "return_type": "Shipment"}
+      },
+      "consumer_calls": [{"method": "GET", "path": "/shipping/{shipmentId}"}],
+      "expected": {"impact": false, "disposition": "none", "verification_plan": false}
+    },
+    {
+      "id": "response_change_unrelated_route",
+      "description": "A response-type change should be suppressed when all observed calls to that provider target different routes.",
+      "source": "synthetic",
+      "provider_service": "catalog-service",
+      "consumer_service": "recommendations-service",
+      "dependency": true,
+      "change": {
+        "kind": "RESPONSE_TYPE_CHANGED",
+        "before": {"method": "GET", "path": "/products/{productId}", "return_type": "Product"},
+        "after": {"method": "GET", "path": "/products/{productId}", "return_type": "ProductSummary"}
+      },
+      "consumer_calls": [
+        {"method": "GET", "path": "/categories/{id}"},
+        {"method": "GET", "path": "/brands/{id}"}
+      ],
+      "expected": {"impact": false, "disposition": "suppressed", "verification_plan": false}
+    }
+  ]
+}
