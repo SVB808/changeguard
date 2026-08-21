@@ -101,6 +101,55 @@ def test_synthesize_openai_selector_is_wired_without_provider_call(tmp_path, mon
     assert "Model participation is limited to evidence-ID selection" in result.stdout
 
 
+def test_synthesize_ollama_selector_is_wired_without_local_call(tmp_path, monkeypatch):
+    path = _write_manifest(tmp_path, repo="acme/local-model")
+    captured = {}
+
+    class FakeOllamaSelector:
+        def __init__(self, model: str, base_url: str):
+            captured["model"] = model
+            captured["base_url"] = base_url
+            self.model = model
+
+        def select(self, evidence):
+            return SynthesisSelection(
+                selected_evidence_ids=[],
+                selector="ollama",
+                model=self.model,
+                input_tokens=31,
+                output_tokens=5,
+            )
+
+    monkeypatch.setattr(
+        "changeguard.synthesis_cli.OllamaEvidenceSelector",
+        FakeOllamaSelector,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "synthesize",
+            "--manifest",
+            str(path),
+            "--selector",
+            "ollama",
+            "--model",
+            "fake-local-model",
+            "--ollama-url",
+            "http://127.0.0.1:11434",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "model": "fake-local-model",
+        "base_url": "http://127.0.0.1:11434",
+    }
+    assert "ChangeGuard V5.1 synthesis | acme/local-model" in result.stdout
+    assert "selector: ollama | model: fake-local-model | tokens: input=31 output=5" in result.stdout
+    assert "Model participation is limited to evidence-ID selection" in result.stdout
+
+
 def test_synthesize_rejects_unknown_selector(tmp_path):
     path = _write_manifest(tmp_path)
 
@@ -110,4 +159,4 @@ def test_synthesize_rejects_unknown_selector(tmp_path):
     )
 
     assert result.exit_code == 2
-    assert "use deterministic or openai" in result.stderr
+    assert "use deterministic, openai, or ollama" in result.stderr
