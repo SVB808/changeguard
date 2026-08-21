@@ -11,7 +11,7 @@ DEFAULT_CORPUS = (
     Path(__file__).resolve().parents[2]
     / "benchmarks"
     / "evaluation"
-    / "rest-impact-v1.json"
+    / "rest-impact-v2.json"
 )
 
 
@@ -54,7 +54,7 @@ def evaluate_cmd(
 
 def _print_report(report: EvaluationReport, details: bool) -> None:
     typer.echo(
-        f"ChangeGuard V4 | corpus: {report.corpus_version} | "
+        f"ChangeGuard V4.1 | corpus: {report.corpus_version} | "
         f"{report.total_cases} case(s)"
     )
     typer.echo(
