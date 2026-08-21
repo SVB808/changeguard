@@ -12,7 +12,13 @@ from urllib.request import Request, urlopen
 
 
 class GitHubAPIError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+    @property
+    def is_rate_limited(self) -> bool:
+        return self.status_code == 403 and "rate limit" in str(self).lower()
 
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -74,7 +80,8 @@ class GitHubClient:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 message = str(exc)
             raise GitHubAPIError(
-                f"GitHub API returned HTTP {exc.code}: {message}"
+                f"GitHub API returned HTTP {exc.code}: {message}",
+                status_code=exc.code,
             ) from exc
         except URLError as exc:
             raise GitHubAPIError(f"Could not reach GitHub API: {exc.reason}") from exc
@@ -165,7 +172,7 @@ class GitHubClient:
                 f"/repos/{repo_full_name}/contents/{encoded_path}?ref={encoded_ref}"
             )
         except GitHubAPIError as exc:
-            if "HTTP 404" in str(exc):
+            if exc.status_code == 404:
                 return None
             raise
 
