@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from collections import defaultdict
 from enum import Enum
 from pathlib import Path
 
@@ -33,6 +34,12 @@ class EvaluationDisposition(str, Enum):
     SUPPRESSED = "suppressed"
     SERVICE = "service"
     ENDPOINT = "endpoint"
+
+
+class ConsumerTechnology(str, Enum):
+    WEBCLIENT = "webclient"
+    FEIGN = "feign"
+    RESTTEMPLATE = "resttemplate"
 
 
 class EndpointSpec(BaseModel):
@@ -66,6 +73,7 @@ class BenchmarkCase(BaseModel):
     reference: str | None = None
     provider_service: str
     consumer_service: str
+    consumer_technology: ConsumerTechnology | None = None
     dependency: bool = True
     change: ChangeSpec
     consumer_calls: list[ConsumerCallSpec] = Field(default_factory=list)
@@ -92,6 +100,7 @@ class CaseEvaluation(BaseModel):
     id: str
     source: str
     reference: str | None = None
+    consumer_technology: ConsumerTechnology | None = None
     trigger: EndpointChangeKind
     expected_impact: bool
     predicted_impact: bool
@@ -109,6 +118,16 @@ class CaseEvaluation(BaseModel):
         )
 
 
+class TechnologyEvaluation(BaseModel):
+    technology: ConsumerTechnology
+    total_cases: int
+    exact_matches: int
+    exact_accuracy: float
+    impact_detection: ConfusionMetrics
+    endpoint_evidence: ConfusionMetrics
+    verification_plan_accuracy: float
+
+
 class EvaluationReport(BaseModel):
     corpus_version: str
     total_cases: int
@@ -119,18 +138,113 @@ class EvaluationReport(BaseModel):
     verification_plan_accuracy: float
     p50_analysis_ms: float
     p95_analysis_ms: float
+    technology_breakdown: list[TechnologyEvaluation] = Field(default_factory=list)
     cases: list[CaseEvaluation]
 
 
 def load_corpus(path: Path | str) -> BenchmarkCorpus:
-    corpus_path = Path(path)
+    """Load a benchmark corpus, optionally extending another versioned corpus.
+
+    A child corpus may declare `extends` with a sibling JSON filename, apply shallow
+    per-case metadata through `case_metadata`, and append new `cases`. This keeps
+    benchmark history immutable while avoiding copy/paste forks of the full corpus.
+    """
+    return _load_corpus(Path(path).expanduser().resolve(), seen=set())
+
+
+def _load_corpus(corpus_path: Path, seen: set[Path]) -> BenchmarkCorpus:
+    if corpus_path in seen:
+        chain = " -> ".join(str(path) for path in [*seen, corpus_path])
+        raise ValueError(f"Benchmark corpus inheritance cycle detected: {chain}")
+
     payload = json.loads(corpus_path.read_text(encoding="utf-8"))
-    return BenchmarkCorpus.model_validate(payload)
+    parent_cases: list[dict] = []
+
+    parent_name = payload.get("extends")
+    if parent_name:
+        parent = _load_corpus(
+            (corpus_path.parent / parent_name).resolve(),
+            seen={*seen, corpus_path},
+        )
+        parent_cases = [case.model_dump(mode="json") for case in parent.cases]
+
+    case_metadata = payload.get("case_metadata", {})
+    by_id = {case["id"]: case for case in parent_cases}
+    for case_id, metadata in case_metadata.items():
+        if case_id not in by_id:
+            raise ValueError(
+                f"Corpus {corpus_path.name} declares metadata for unknown case {case_id!r}"
+            )
+        by_id[case_id] = {**by_id[case_id], **metadata}
+
+    inherited = [by_id[case["id"]] for case in parent_cases]
+    additional = payload.get("cases", [])
+    inherited_ids = {case["id"] for case in inherited}
+    duplicate_ids = sorted(
+        case["id"] for case in additional if case["id"] in inherited_ids
+    )
+    if duplicate_ids:
+        raise ValueError(
+            f"Corpus {corpus_path.name} redefines inherited case(s): "
+            + ", ".join(duplicate_ids)
+        )
+
+    resolved = {
+        "version": payload["version"],
+        "description": payload["description"],
+        "cases": [*inherited, *additional],
+    }
+    return BenchmarkCorpus.model_validate(resolved)
 
 
 def evaluate_corpus(corpus: BenchmarkCorpus) -> EvaluationReport:
     results = [_evaluate_case(case) for case in corpus.cases]
+    exact_matches, impact_metrics, endpoint_metrics, verification_accuracy = (
+        _metrics_for_results(results)
+    )
+    durations = [result.analysis_ms for result in results]
 
+    grouped: dict[ConsumerTechnology, list[CaseEvaluation]] = defaultdict(list)
+    for result in results:
+        if result.consumer_technology is not None:
+            grouped[result.consumer_technology].append(result)
+
+    technology_breakdown: list[TechnologyEvaluation] = []
+    for technology in sorted(grouped, key=lambda item: item.value):
+        technology_results = grouped[technology]
+        tech_exact, tech_impact, tech_endpoint, tech_verification = _metrics_for_results(
+            technology_results
+        )
+        technology_breakdown.append(
+            TechnologyEvaluation(
+                technology=technology,
+                total_cases=len(technology_results),
+                exact_matches=tech_exact,
+                exact_accuracy=_ratio(tech_exact, len(technology_results)),
+                impact_detection=tech_impact,
+                endpoint_evidence=tech_endpoint,
+                verification_plan_accuracy=tech_verification,
+            )
+        )
+
+    return EvaluationReport(
+        corpus_version=corpus.version,
+        total_cases=len(results),
+        exact_matches=exact_matches,
+        exact_accuracy=_ratio(exact_matches, len(results)),
+        impact_detection=impact_metrics,
+        endpoint_evidence=endpoint_metrics,
+        verification_plan_accuracy=verification_accuracy,
+        p50_analysis_ms=_percentile(durations, 0.50),
+        p95_analysis_ms=_percentile(durations, 0.95),
+        technology_breakdown=technology_breakdown,
+        cases=results,
+    )
+
+
+def _metrics_for_results(
+    results: list[CaseEvaluation],
+) -> tuple[int, ConfusionMetrics, ConfusionMetrics, float]:
     impact_metrics = _confusion(
         expected=[result.expected_impact for result in results],
         predicted=[result.predicted_impact for result in results],
@@ -145,25 +259,16 @@ def evaluate_corpus(corpus: BenchmarkCorpus) -> EvaluationReport:
             for result in results
         ],
     )
-
     exact_matches = sum(result.exact_match for result in results)
     verification_matches = sum(
         result.expected_verification_plan == result.actual_verification_plan
         for result in results
     )
-    durations = [result.analysis_ms for result in results]
-
-    return EvaluationReport(
-        corpus_version=corpus.version,
-        total_cases=len(results),
-        exact_matches=exact_matches,
-        exact_accuracy=_ratio(exact_matches, len(results)),
-        impact_detection=impact_metrics,
-        endpoint_evidence=endpoint_metrics,
-        verification_plan_accuracy=_ratio(verification_matches, len(results)),
-        p50_analysis_ms=_percentile(durations, 0.50),
-        p95_analysis_ms=_percentile(durations, 0.95),
-        cases=results,
+    return (
+        exact_matches,
+        impact_metrics,
+        endpoint_metrics,
+        _ratio(verification_matches, len(results)),
     )
 
 
@@ -190,6 +295,7 @@ def _evaluate_case(case: BenchmarkCase) -> CaseEvaluation:
         id=case.id,
         source=case.source,
         reference=case.reference,
+        consumer_technology=case.consumer_technology,
         trigger=case.change.kind,
         expected_impact=case.expected.impact,
         predicted_impact=bool(active),
@@ -211,6 +317,8 @@ def _graph_for_case(case: BenchmarkCase) -> ServiceDependencyGraph:
             DependencyEdge(
                 source=case.consumer_service,
                 target=case.provider_service,
+                source_module=consumer_module,
+                target_module=provider_module,
                 kind=DependencyKind.SERVICE_URL,
                 evidence_path=f"{consumer_module}/Client.java",
                 evidence=f"http://{case.provider_service}",
@@ -221,6 +329,8 @@ def _graph_for_case(case: BenchmarkCase) -> ServiceDependencyGraph:
         ConsumerHttpCall(
             consumer_service=case.consumer_service,
             target_service=case.provider_service,
+            consumer_module=consumer_module,
+            target_module=provider_module,
             http_method=call.method.upper(),
             path=call.path,
             evidence_path=f"{consumer_module}/Client.java",
@@ -251,6 +361,7 @@ def _file_for_case(case: BenchmarkCase) -> FileChange:
         path=f"{provider_module}/ProviderResource.java",
         language="java",
         service=case.provider_service,
+        service_module=provider_module,
         semantic_changes=[semantic_change],
     )
 
