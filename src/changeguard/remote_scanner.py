@@ -6,6 +6,7 @@ from changeguard.git_client import RawGitChange
 from changeguard.github_client import GitHubAPIError, GitHubChangedFile, GitHubClient
 from changeguard.impact_analysis import generate_impact_candidates, refine_impact_candidates
 from changeguard.java_analyzer import JavaSpringAnalyzer
+from changeguard.maven_layout import MavenBuildLayoutBuilder
 from changeguard.models import ChangeManifest, FileChange, ServiceDependencyGraph
 from changeguard.verification import build_verification_plans
 
@@ -31,6 +32,7 @@ def scan_pull_request(
     dependency_analysis: bool = False,
     impact_analysis: bool = False,
     verification_planning: bool = False,
+    maven_layout_builder: MavenBuildLayoutBuilder | None = None,
 ) -> ChangeManifest:
     client = client or GitHubClient()
     pull_request = client.get_pull_request(repo_full_name, pr_number)
@@ -87,9 +89,22 @@ def scan_pull_request(
 
     verification_plans = []
     if verification_planning and dependency_graph is not None:
+        module_layout = {}
+        if maven_layout_builder is not None:
+            module_layout = maven_layout_builder.build(
+                pull_request.repo_full_name,
+                pull_request.head_sha,
+            )
+        elif hasattr(client, "list_repository_paths"):
+            module_layout = MavenBuildLayoutBuilder(client=client).build(
+                pull_request.repo_full_name,
+                pull_request.head_sha,
+            )
+
         verification_plans = build_verification_plans(
             impact_candidates,
             dependency_graph,
+            module_layout=module_layout,
         )
 
     return ChangeManifest(
