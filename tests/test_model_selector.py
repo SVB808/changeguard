@@ -1,8 +1,14 @@
+import json
 from types import SimpleNamespace
+from urllib.error import URLError
 
 import pytest
 
-from changeguard.model_selector import ModelSelectionError, OpenAIEvidenceSelector
+from changeguard.model_selector import (
+    ModelSelectionError,
+    OllamaEvidenceSelector,
+    OpenAIEvidenceSelector,
+)
 from changeguard.synthesis import (
     EvidenceCategory,
     EvidenceItem,
@@ -27,6 +33,20 @@ class FakeResponses:
 class FakeClient:
     def __init__(self, responses: FakeResponses):
         self.responses = responses
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
 
 def _evidence() -> list[EvidenceItem]:
@@ -108,3 +128,84 @@ def test_openai_selector_skips_provider_call_for_empty_evidence():
     assert selection.selector == "openai"
     assert selection.model == "test-model"
     assert responses.calls == []
+
+
+def test_ollama_selector_uses_local_schema_and_records_usage():
+    calls = []
+
+    def opener(request, timeout):
+        calls.append((request, timeout))
+        return FakeHTTPResponse(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": '{"selected_evidence_ids":["impact:0"]}',
+                },
+                "prompt_eval_count": 73,
+                "eval_count": 9,
+            }
+        )
+
+    selector = OllamaEvidenceSelector(
+        model="local-test-model",
+        base_url="http://localhost:11434/",
+        timeout_seconds=17,
+        opener=opener,
+    )
+
+    selection = selector.select(_evidence())
+
+    assert selection.selected_evidence_ids == ["impact:0"]
+    assert selection.selector == "ollama"
+    assert selection.model == "local-test-model"
+    assert selection.input_tokens == 73
+    assert selection.output_tokens == 9
+
+    request, timeout = calls[0]
+    assert request.full_url == "http://localhost:11434/api/chat"
+    assert timeout == 17
+    payload = json.loads(request.data.decode("utf-8"))
+    assert payload["model"] == "local-test-model"
+    assert payload["stream"] is False
+    assert payload["format"]["additionalProperties"] is False
+    assert payload["options"]["temperature"] == 0
+    assert "untrusted data" in payload["messages"][0]["content"]
+    assert "impact:0" in payload["messages"][1]["content"]
+
+
+def test_ollama_selector_rejects_invalid_structured_payload():
+    def opener(request, timeout):
+        return FakeHTTPResponse(
+            {"message": {"role": "assistant", "content": "not-json"}}
+        )
+
+    selector = OllamaEvidenceSelector(opener=opener)
+
+    with pytest.raises(ModelSelectionError, match="invalid structured evidence"):
+        selector.select(_evidence())
+
+
+def test_ollama_selector_reports_local_connection_failure():
+    def opener(request, timeout):
+        raise URLError("connection refused")
+
+    selector = OllamaEvidenceSelector(opener=opener)
+
+    with pytest.raises(ModelSelectionError, match="Could not connect to Ollama"):
+        selector.select(_evidence())
+
+
+def test_ollama_selector_skips_local_call_for_empty_evidence():
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request)
+        raise AssertionError("provider should not be called")
+
+    selector = OllamaEvidenceSelector(model="local-test-model", opener=opener)
+    selection = selector.select([])
+
+    assert selection.selected_evidence_ids == []
+    assert selection.selector == "ollama"
+    assert selection.model == "local-test-model"
+    assert calls == []
