@@ -6,6 +6,7 @@ from changeguard.models import (
     DependencyKind,
     EndpointChangeKind,
     EndpointSemanticChange,
+    ImpactMatchLevel,
     ServiceDependencyGraph,
     ServiceNode,
     SpringEndpoint,
@@ -159,3 +160,45 @@ def test_impact_analysis_retains_non_matching_call_as_suppressed_candidate():
     suppressed = result.suppressed_impact_candidates[0]
     assert suppressed.consumer_call_evidence == [call]
     assert suppressed.suppression_reason is not None
+
+
+def test_verification_planning_implies_impact_analysis_and_targets_endpoint_match():
+    pr = _pull_request()
+    call = ConsumerHttpCall(
+        consumer_service="api-gateway",
+        target_service="customers-service",
+        http_method="GET",
+        path="/owners/{id}",
+        evidence_path=(
+            "spring-petclinic-api-gateway/src/main/java/example/"
+            "CustomersServiceClient.java"
+        ),
+        evidence='.get().uri("http://customers-service/owners/{id}")',
+    )
+    graph = _graph([call])
+
+    result = scan_pull_request(
+        "acme/petclinic",
+        13,
+        client=FakeGitHubClient(pr, "class OwnerResource {}"),
+        semantic_analyzer=FakeSemanticAnalyzer(),
+        dependency_graph_builder=FakeGraphBuilder(graph),
+        verification_planning=True,
+    )
+
+    assert result.impact_analysis_enabled is True
+    assert result.verification_planning_enabled is True
+    assert len(result.impact_candidates) == 1
+    assert result.impact_candidates[0].match_level == ImpactMatchLevel.ENDPOINT
+    assert result.suppressed_impact_candidates == []
+    assert len(result.verification_plans) == 1
+    plan = result.verification_plans[0]
+    assert plan.consumer_service == "api-gateway"
+    assert plan.consumer_module == "spring-petclinic-api-gateway"
+    assert plan.command == [
+        "mvn",
+        "-pl",
+        "spring-petclinic-api-gateway",
+        "-am",
+        "test",
+    ]
