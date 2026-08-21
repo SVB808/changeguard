@@ -93,18 +93,30 @@ class ServiceDependencyGraphBuilder:
         )
 
     def _discover_nodes(self, paths: list[str]) -> list[ServiceNode]:
-        modules: set[str] = set()
+        """Discover Spring service modules at any repository depth.
+
+        The initial Petclinic implementation assumed every service lived directly at
+        repository root. Seeded benchmark workspaces and real monorepos can nest
+        Maven modules, so the module directory containing a matching `pom.xml` is now
+        preserved as the service's full repository-relative module path.
+        """
+        modules: dict[str, str] = {}
         for path in paths:
-            parts = path.replace("\\", "/").split("/")
-            if len(parts) == 2 and parts[1] == "pom.xml" and parts[0].startswith(MODULE_PREFIX):
-                modules.add(parts[0])
+            normalized = path.replace("\\", "/")
+            parts = normalized.split("/")
+            if len(parts) < 2 or parts[-1] != "pom.xml":
+                continue
+
+            module_name = parts[-2]
+            if not module_name.startswith(MODULE_PREFIX):
+                continue
+
+            module_path = "/".join(parts[:-1])
+            modules[module_path] = module_name.removeprefix(MODULE_PREFIX)
 
         return [
-            ServiceNode(
-                name=module.removeprefix(MODULE_PREFIX),
-                module_path=module,
-            )
-            for module in sorted(modules)
+            ServiceNode(name=name, module_path=module_path)
+            for module_path, name in sorted(modules.items())
         ]
 
     def _extract_edges(
@@ -192,10 +204,15 @@ class ServiceDependencyGraphBuilder:
     @staticmethod
     def _service_for_path(nodes: list[ServiceNode], path: str) -> str | None:
         normalized = path.replace("\\", "/")
-        for node in nodes:
-            if normalized.startswith(node.module_path.rstrip("/") + "/"):
-                return node.name
-        return None
+        matching = [
+            node
+            for node in nodes
+            if normalized.startswith(node.module_path.rstrip("/") + "/")
+        ]
+        if not matching:
+            return None
+        matching.sort(key=lambda node: len(node.module_path), reverse=True)
+        return matching[0].name
 
     @staticmethod
     def _dedupe_edges(edges: list[DependencyEdge]) -> list[DependencyEdge]:
