@@ -52,6 +52,7 @@ class ImpactKind(str, Enum):
 
 class ImpactMatchLevel(str, Enum):
     SERVICE = "service"
+    ENDPOINT = "endpoint"
 
 
 class SpringEndpoint(BaseModel):
@@ -108,9 +109,19 @@ class DependencyEdge(BaseModel):
     evidence: str
 
 
+class ConsumerHttpCall(BaseModel):
+    consumer_service: str
+    target_service: str
+    http_method: str
+    path: str
+    evidence_path: str
+    evidence: str
+
+
 class ServiceDependencyGraph(BaseModel):
     nodes: list[ServiceNode] = Field(default_factory=list)
     edges: list[DependencyEdge] = Field(default_factory=list)
+    consumer_calls: list[ConsumerHttpCall] = Field(default_factory=list)
 
     def service_for_path(self, path: str) -> str | None:
         normalized = path.replace("\\", "/")
@@ -135,6 +146,13 @@ class ServiceDependencyGraph(BaseModel):
             if edge.source == source and edge.target == target
         ]
 
+    def calls_between(self, consumer: str, target: str) -> list[ConsumerHttpCall]:
+        return [
+            call
+            for call in self.consumer_calls
+            if call.consumer_service == consumer and call.target_service == target
+        ]
+
 
 class ImpactCandidate(BaseModel):
     kind: ImpactKind = ImpactKind.POTENTIAL_CONSUMER_IMPACT
@@ -147,6 +165,8 @@ class ImpactCandidate(BaseModel):
     match_level: ImpactMatchLevel = ImpactMatchLevel.SERVICE
     reason: str
     dependency_evidence: list[DependencyEdge] = Field(default_factory=list)
+    consumer_call_evidence: list[ConsumerHttpCall] = Field(default_factory=list)
+    suppression_reason: str | None = None
 
 
 class FileChange(BaseModel):
@@ -170,6 +190,7 @@ class ChangeManifest(BaseModel):
     dependency_graph: ServiceDependencyGraph | None = None
     impact_analysis_enabled: bool = False
     impact_candidates: list[ImpactCandidate] = Field(default_factory=list)
+    suppressed_impact_candidates: list[ImpactCandidate] = Field(default_factory=list)
 
     @property
     def changed_file_count(self) -> int:
@@ -178,3 +199,7 @@ class ChangeManifest(BaseModel):
     @property
     def impact_candidate_count(self) -> int:
         return len(self.impact_candidates)
+
+    @property
+    def suppressed_impact_candidate_count(self) -> int:
+        return len(self.suppressed_impact_candidates)
