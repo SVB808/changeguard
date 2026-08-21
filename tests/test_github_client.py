@@ -44,7 +44,10 @@ def test_fetches_text_file_at_exact_ref():
 def test_missing_file_at_ref_returns_none():
     class MissingContentClient(GitHubClient):
         def _get_json(self, path: str):
-            raise GitHubAPIError("GitHub API returned HTTP 404: Not Found")
+            raise GitHubAPIError(
+                "GitHub API returned HTTP 404: Not Found",
+                status_code=404,
+            )
 
     result = MissingContentClient().get_file_text(
         "acme/orders",
@@ -81,3 +84,22 @@ def test_rejects_truncated_repository_tree():
 
     with pytest.raises(GitHubAPIError, match="truncated"):
         TruncatedTreeClient().list_repository_paths("acme/orders", "main")
+
+
+def test_rate_limit_error_exposes_status_and_hint_signal():
+    error = GitHubAPIError(
+        "GitHub API returned HTTP 403: API rate limit exceeded",
+        status_code=403,
+    )
+
+    assert error.status_code == 403
+    assert error.is_rate_limited is True
+
+
+def test_unrelated_forbidden_error_is_not_classified_as_rate_limit():
+    error = GitHubAPIError(
+        "GitHub API returned HTTP 403: Resource not accessible",
+        status_code=403,
+    )
+
+    assert error.is_rate_limited is False
