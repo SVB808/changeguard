@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -85,10 +87,24 @@ def execute_verification_plan(
             error=validation_error,
         )
 
+    process_command = plan.command
+    if runner is subprocess.run:
+        resolved_command = _resolve_process_command(plan.command)
+        if resolved_command is None:
+            return VerificationResult(
+                plan=plan,
+                status=VerificationStatus.ERROR,
+                error=(
+                    f"Could not resolve '{plan.command[0]}' to an executable launcher. "
+                    "Install Maven or make mvn/mvn.cmd available on PATH."
+                ),
+            )
+        process_command = resolved_command
+
     started = time.perf_counter()
     try:
         completed = runner(
-            plan.command,
+            process_command,
             cwd=workspace,
             capture_output=True,
             text=True,
@@ -101,7 +117,7 @@ def execute_verification_plan(
             status=VerificationStatus.ERROR,
             duration_seconds=time.perf_counter() - started,
             error=(
-                f"Could not execute '{plan.command[0]}'. Install Maven or make the "
+                f"Could not execute '{process_command[0]}'. Install Maven or make the "
                 "configured executable available on PATH."
             ),
         )
@@ -152,6 +168,36 @@ def create_maven_module_plan(
         command=["mvn", "-pl", consumer_module, "-am", "test"],
         reason="Explicit local Maven module verification requested by the user.",
     )
+
+
+def _resolve_process_command(
+    command: list[str],
+    *,
+    platform_name: str | None = None,
+    resolver: Callable[[str], str | None] = shutil.which,
+) -> list[str] | None:
+    """Resolve a portable command name to the concrete process launcher.
+
+    PowerShell can resolve `mvn` to Maven's `mvn.cmd`, while Python's direct process
+    creation may not resolve the same batch launcher from the extensionless name.
+    Keep plans portable as `mvn ...`, then resolve the concrete launcher only when
+    execution is explicitly requested.
+    """
+    if not command:
+        return None
+
+    executable = command[0]
+    candidates = [executable]
+    current_platform = platform_name or os.name
+    if current_platform == "nt" and Path(executable).suffix == "":
+        candidates.extend([f"{executable}.cmd", f"{executable}.bat", f"{executable}.exe"])
+
+    for candidate in candidates:
+        resolved = resolver(candidate)
+        if resolved is not None:
+            return [resolved, *command[1:]]
+
+    return None
 
 
 def _validate_workspace(workspace: Path, consumer_module: str) -> str | None:
