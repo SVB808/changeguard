@@ -1,6 +1,10 @@
-from changeguard.impact_analysis import generate_impact_candidates
+from changeguard.impact_analysis import (
+    generate_impact_candidates,
+    refine_impact_candidates,
+)
 from changeguard.models import (
     ChangeStatus,
+    ConsumerHttpCall,
     DependencyEdge,
     DependencyKind,
     EndpointChangeKind,
@@ -14,18 +18,18 @@ from changeguard.models import (
 )
 
 
-def _endpoint(path: str, method: str = "GET") -> SpringEndpoint:
+def _endpoint(path: str, method: str = "GET", parameter_types: list[str] | None = None) -> SpringEndpoint:
     return SpringEndpoint(
         controller="OwnerResource",
         method_name="findOwner",
         http_method=method,
         path=path,
         return_type="OwnerDetails",
-        parameter_types=["int"],
+        parameter_types=parameter_types or ["int"],
     )
 
 
-def _graph() -> ServiceDependencyGraph:
+def _graph(consumer_calls: list[ConsumerHttpCall] | None = None) -> ServiceDependencyGraph:
     return ServiceDependencyGraph(
         nodes=[
             ServiceNode(
@@ -56,6 +60,21 @@ def _graph() -> ServiceDependencyGraph:
                 evidence="http://customers-service",
             ),
         ],
+        consumer_calls=consumer_calls or [],
+    )
+
+
+def _call(method: str, path: str) -> ConsumerHttpCall:
+    return ConsumerHttpCall(
+        consumer_service="api-gateway",
+        target_service="customers-service",
+        http_method=method,
+        path=path,
+        evidence_path=(
+            "spring-petclinic-api-gateway/src/main/java/example/"
+            "CustomersServiceClient.java"
+        ),
+        evidence=f'.{method.lower()}().uri("http://customers-service{path}")',
     )
 
 
@@ -132,3 +151,61 @@ def test_path_change_creates_candidate_but_unrelated_service_does_not():
     assert candidates[0].consumer_service == "api-gateway"
     assert candidates[0].after is not None
     assert candidates[0].after.path == "/customers/{ownerId}"
+
+
+def test_exact_consumer_call_upgrades_candidate_to_endpoint_match():
+    file = FileChange(
+        status=ChangeStatus.MODIFIED,
+        path="spring-petclinic-customers-service/src/main/java/example/OwnerResource.java",
+        service="customers-service",
+        semantic_changes=[
+            EndpointSemanticChange(
+                kind=EndpointChangeKind.ENDPOINT_REMOVED,
+                before=_endpoint("/owners/{ownerId}", method="GET"),
+            )
+        ],
+    )
+    graph = _graph([_call("GET", "/owners/{id}")])
+
+    service_candidates = generate_impact_candidates([file], graph)
+    active, suppressed = refine_impact_candidates(service_candidates, graph)
+
+    assert suppressed == []
+    assert len(active) == 1
+    assert active[0].match_level == ImpactMatchLevel.ENDPOINT
+    assert active[0].consumer_call_evidence[0].path == "/owners/{id}"
+
+
+def test_non_matching_explicit_call_suppresses_service_level_candidate():
+    before = _endpoint(
+        "/owners",
+        method="POST",
+        parameter_types=["Owner"],
+    )
+    after = _endpoint(
+        "/owners",
+        method="POST",
+        parameter_types=["OwnerRequest"],
+    )
+    file = FileChange(
+        status=ChangeStatus.MODIFIED,
+        path="spring-petclinic-customers-service/src/main/java/example/OwnerResource.java",
+        service="customers-service",
+        semantic_changes=[
+            EndpointSemanticChange(
+                kind=EndpointChangeKind.REQUEST_SIGNATURE_CHANGED,
+                before=before,
+                after=after,
+            )
+        ],
+    )
+    graph = _graph([_call("GET", "/owners/{ownerId}")])
+
+    service_candidates = generate_impact_candidates([file], graph)
+    active, suppressed = refine_impact_candidates(service_candidates, graph)
+
+    assert active == []
+    assert len(suppressed) == 1
+    assert suppressed[0].match_level == ImpactMatchLevel.SERVICE
+    assert suppressed[0].suppression_reason is not None
+    assert suppressed[0].consumer_call_evidence[0].http_method == "GET"
