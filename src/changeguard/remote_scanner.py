@@ -111,10 +111,14 @@ def _attach_dependency_context(
     graph: ServiceDependencyGraph,
 ) -> None:
     for file in files:
-        service = graph.service_for_path(file.path)
-        file.service = service
-        if service is not None:
-            file.direct_dependents = graph.direct_dependents(service)
+        node = graph.node_for_path(file.path)
+        if node is None:
+            continue
+        file.service = node.name
+        file.service_module = node.module_path
+        file.direct_dependents = [
+            dependent.name for dependent in graph.direct_dependent_nodes(node)
+        ]
 
 
 def _load_java_versions(
