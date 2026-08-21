@@ -51,6 +51,7 @@ class FakeGraphClient:
 class NestedGraphClient:
     def __init__(self):
         self.paths = [
+            "benchmarks/rest-path-break/pom.xml",
             "benchmarks/rest-path-break/spring-petclinic-provider-service/pom.xml",
             "benchmarks/rest-path-break/spring-petclinic-provider-service/src/main/java/benchmark/provider/OwnerResource.java",
             "benchmarks/rest-path-break/spring-petclinic-consumer-service/pom.xml",
@@ -72,6 +73,76 @@ class NestedGraphClient:
 
     def get_file_text(self, repo_full_name: str, path: str, ref: str) -> str | None:
         return self.contents.get(path)
+
+
+class GenericGraphClient:
+    def __init__(self):
+        self.paths = [
+            "edge-router/pom.xml",
+            "edge-router/src/main/resources/application.yml",
+            "edge-router/src/main/java/example/BillingClient.java",
+            "billing-app/pom.xml",
+            "billing-app/src/main/resources/application.properties",
+            "shared-library/pom.xml",
+        ]
+        self.contents = {
+            "edge-router/src/main/resources/application.yml": """
+                spring:
+                  application:
+                    name: edge-gateway
+            """,
+            "billing-app/src/main/resources/application.properties": (
+                "spring.application.name=billing-service\n"
+            ),
+            "edge-router/src/main/java/example/BillingClient.java": """
+                class BillingClient {
+                    Object invoice(String invoiceId) {
+                        return client.get()
+                            .uri("http://billing-service/invoices/{invoiceId}", invoiceId);
+                    }
+                }
+            """,
+        }
+
+    def list_repository_paths(self, repo_full_name: str, ref: str) -> list[str]:
+        return self.paths
+
+    def get_file_text(self, repo_full_name: str, path: str, ref: str) -> str | None:
+        return self.contents.get(path)
+
+
+class EnvDefaultGraphClient:
+    paths = [
+        "orders-app/pom.xml",
+        "orders-app/src/main/resources/application.properties",
+    ]
+    contents = {
+        "orders-app/src/main/resources/application.properties": (
+            "spring.application.name=${SPRING_APPLICATION_NAME:orders-service}\n"
+        )
+    }
+
+    def list_repository_paths(self, repo_full_name: str, ref: str) -> list[str]:
+        return self.paths
+
+    def get_file_text(self, repo_full_name: str, path: str, ref: str) -> str | None:
+        return self.contents.get(path)
+
+
+class AggregatorGraphClient:
+    paths = [
+        "platform/pom.xml",
+        "platform/orders-service/pom.xml",
+        "platform/orders-service/src/main/java/example/OrdersApplication.java",
+        "platform/payments-service/pom.xml",
+        "platform/payments-service/src/main/java/example/PaymentsApplication.java",
+    ]
+
+    def list_repository_paths(self, repo_full_name: str, ref: str) -> list[str]:
+        return self.paths
+
+    def get_file_text(self, repo_full_name: str, path: str, ref: str) -> str | None:
+        return None
 
 
 def test_builds_graph_from_gateway_routes_and_service_urls():
@@ -151,3 +222,62 @@ def test_discovers_nested_service_modules_and_call_evidence():
     assert call.target_service == "provider-service"
     assert call.http_method == "GET"
     assert call.path == "/owners/{ownerId}"
+
+
+def test_discovers_generic_names_from_spring_application_configuration():
+    graph = ServiceDependencyGraphBuilder(client=GenericGraphClient()).build(
+        "acme/commerce",
+        "main",
+    )
+
+    assert {node.name for node in graph.nodes} == {
+        "billing-service",
+        "edge-gateway",
+        "shared-library",
+    }
+    assert {
+        (edge.source, edge.target, edge.kind)
+        for edge in graph.edges
+    } == {
+        ("edge-gateway", "billing-service", DependencyKind.SERVICE_URL),
+    }
+    assert len(graph.consumer_calls) == 1
+    assert graph.consumer_calls[0].consumer_service == "edge-gateway"
+    assert graph.consumer_calls[0].target_service == "billing-service"
+
+
+def test_uses_environment_default_as_deterministic_application_name():
+    graph = ServiceDependencyGraphBuilder(client=EnvDefaultGraphClient()).build(
+        "acme/orders",
+        "main",
+    )
+
+    assert [(node.name, node.module_path) for node in graph.nodes] == [
+        ("orders-service", "orders-app")
+    ]
+
+
+def test_falls_back_to_plain_module_basename_without_application_name():
+    client = AggregatorGraphClient()
+    client.paths = [
+        "notifications-service/pom.xml",
+        "notifications-service/src/main/java/example/NotificationsApplication.java",
+    ]
+
+    graph = ServiceDependencyGraphBuilder(client=client).build("acme/notify", "main")
+
+    assert [(node.name, node.module_path) for node in graph.nodes] == [
+        ("notifications-service", "notifications-service")
+    ]
+
+
+def test_excludes_pure_aggregator_but_keeps_child_modules():
+    graph = ServiceDependencyGraphBuilder(client=AggregatorGraphClient()).build(
+        "acme/platform",
+        "main",
+    )
+
+    assert {node.name: node.module_path for node in graph.nodes} == {
+        "orders-service": "platform/orders-service",
+        "payments-service": "platform/payments-service",
+    }
