@@ -4,7 +4,7 @@ from changeguard.classifier import classify
 from changeguard.dependency_graph import ServiceDependencyGraphBuilder
 from changeguard.git_client import RawGitChange
 from changeguard.github_client import GitHubAPIError, GitHubChangedFile, GitHubClient
-from changeguard.impact_analysis import generate_impact_candidates
+from changeguard.impact_analysis import generate_impact_candidates, refine_impact_candidates
 from changeguard.java_analyzer import JavaSpringAnalyzer
 from changeguard.models import ChangeManifest, FileChange, ServiceDependencyGraph
 
@@ -74,8 +74,13 @@ def scan_pull_request(
         _attach_dependency_context(files, dependency_graph)
 
     impact_candidates = []
+    suppressed_impact_candidates = []
     if impact_analysis and dependency_graph is not None:
-        impact_candidates = generate_impact_candidates(files, dependency_graph)
+        service_candidates = generate_impact_candidates(files, dependency_graph)
+        impact_candidates, suppressed_impact_candidates = refine_impact_candidates(
+            service_candidates,
+            dependency_graph,
+        )
 
     return ChangeManifest(
         repo=pull_request.repo_full_name,
@@ -85,6 +90,7 @@ def scan_pull_request(
         dependency_graph=dependency_graph,
         impact_analysis_enabled=impact_analysis,
         impact_candidates=impact_candidates,
+        suppressed_impact_candidates=suppressed_impact_candidates,
     )
 
 
