@@ -12,6 +12,7 @@ from changeguard.java_analyzer import JavaAnalyzerError
 from changeguard.models import VerificationStatus
 from changeguard.remote_scanner import scan_pull_request
 from changeguard.scanner import scan
+from changeguard.synthesis_cli import synthesize_cmd
 from changeguard.verification import (
     DEFAULT_TIMEOUT_SECONDS,
     create_maven_module_plan,
@@ -22,6 +23,7 @@ app = typer.Typer(
     help="ChangeGuard: deterministic change-impact evidence before AI reasoning."
 )
 app.command("evaluate")(evaluate_cmd)
+app.command("synthesize")(synthesize_cmd)
 
 
 def _format_endpoint(endpoint) -> str:
