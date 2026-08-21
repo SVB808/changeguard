@@ -89,11 +89,18 @@ def scan_pull_request(
 
     verification_plans = []
     if verification_planning and dependency_graph is not None:
-        layout_builder = maven_layout_builder or MavenBuildLayoutBuilder(client=client)
-        module_layout = layout_builder.build(
-            pull_request.repo_full_name,
-            pull_request.head_sha,
-        )
+        module_layout = {}
+        if maven_layout_builder is not None:
+            module_layout = maven_layout_builder.build(
+                pull_request.repo_full_name,
+                pull_request.head_sha,
+            )
+        elif hasattr(client, "list_repository_paths"):
+            module_layout = MavenBuildLayoutBuilder(client=client).build(
+                pull_request.repo_full_name,
+                pull_request.head_sha,
+            )
+
         verification_plans = build_verification_plans(
             impact_candidates,
             dependency_graph,
