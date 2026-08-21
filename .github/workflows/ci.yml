@@ -56,7 +56,7 @@ jobs:
         run: mvn -f analyzers/java-spring/pom.xml package
 
   seeded-benchmark:
-    name: Seeded REST baseline
+    name: Seeded REST baselines
     runs-on: ubuntu-latest
 
     steps:
@@ -70,5 +70,8 @@ jobs:
           java-version: "17"
           cache: maven
 
-      - name: Verify seeded benchmark baseline stays green
+      - name: Verify WebClient-style benchmark baseline stays green
         run: mvn -f benchmarks/rest-path-break/pom.xml test
+
+      - name: Verify Feign and RestTemplate benchmark baseline stays green
+        run: mvn -f benchmarks/client-style-path-break/pom.xml test
