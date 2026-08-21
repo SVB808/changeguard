@@ -2,26 +2,36 @@
 
 ChangeGuard is a change-impact and release-risk engine for Java/Spring microservices.
 
-The long-term goal is to answer a harder question than "does this PR look okay?":
+The core question is:
 
 > **If this change is merged, what can it break outside the files that changed?**
 
-## Current milestone: deterministic evidence + Spring REST semantics
+ChangeGuard deliberately separates three stages:
 
-ChangeGuard deliberately separates observable facts from probabilistic reasoning.
+```text
+evidence -> impact inference -> verification
+```
+
+There is still **no LLM in the current implementation**. Deterministic evidence, impact refinement, and verification boundaries are being built first so later agents have something measurable to reason over.
+
+## Current milestone: V3.0 targeted verification
 
 The current pipeline can:
 
 1. inspect local Git refs or a public GitHub pull request,
 2. classify changed engineering surfaces,
-3. fetch the full before/after Java source for changed files,
-4. parse Spring controllers with a JVM AST analyzer,
-5. emit structured REST endpoint changes.
+3. fetch full before/after Java source at exact Git revisions,
+4. parse Spring REST and Spring Security semantics with a JVM AST analyzer,
+5. build a cross-service dependency graph,
+6. extract explicit Java HTTP consumer calls,
+7. join compatibility-sensitive provider changes with consumer evidence,
+8. suppress unsupported service-level candidates without deleting their audit trail,
+9. create targeted Maven verification plans for endpoint-level candidates,
+10. explicitly execute those plans only in a user-supplied local workspace.
 
-There is still **no LLM in this stage**. Agent reasoning will be introduced only after the evidence layer is measurable and reliable.
+## Deterministic evidence currently supported
 
-### Current engineering surfaces
-
+Engineering surfaces:
 - API contract
 - database
 - security
@@ -32,14 +42,26 @@ There is still **no LLM in this stage**. Agent reasoning will be introduced only
 - deployment
 - observability
 
-### Current Spring REST semantic changes
-
+Spring REST semantic changes:
 - endpoint added
 - endpoint removed
 - endpoint path changed
 - HTTP method changed
 - request signature changed
 - response type changed
+
+Spring Security semantic changes:
+- security policy added
+- security policy removed
+- security policy changed
+- authorization selectors/actions
+- explicitly disabled CSRF, CORS, HTTP Basic, and form login
+
+Cross-service evidence:
+- Spring Cloud Gateway `lb://service` routes
+- explicit service URLs in configuration
+- explicit service URLs in Java `*Client`, `*Gateway`, and `*Connector` classes
+- literal WebClient-style HTTP method + route extraction
 
 ## Why deterministic-first?
 
@@ -51,17 +73,19 @@ For example, a PR diff may show only:
 @GetMapping("/health")
 ```
 
-while the unchanged class-level annotation contains:
+while an unchanged class-level annotation contains:
 
 ```java
 @RequestMapping("/vets")
 ```
 
-The semantic analyzer reads the full source at both Git revisions and derives the actual endpoint as `GET /vets/health`.
+ChangeGuard reads the full source at both revisions and derives the actual endpoint as `GET /vets/health`.
+
+The same principle applies across services. A service-level dependency alone is not enough to claim breakage. If an explicit consumer call is available, ChangeGuard compares HTTP method and normalized route before keeping or suppressing an impact candidate.
 
 ## Quick start
 
-Python 3.11+ and Java 17+ are required for the current development build.
+Python 3.11+ and Java 17+ are required.
 
 ```bash
 python -m venv .venv
@@ -89,9 +113,11 @@ The shaded analyzer JAR is written to:
 analyzers/java-spring/target/changeguard-java-analyzer.jar
 ```
 
-### Analyze a public GitHub PR
+For repeated public GitHub analysis, set `GITHUB_TOKEN` to avoid the low unauthenticated API rate limit.
 
-No clone of the target repository is required:
+## Analyze a public GitHub PR
+
+Basic semantic scan:
 
 ```bash
 changeguard pr \
@@ -99,79 +125,115 @@ changeguard pr \
   --pr 494
 ```
 
-Semantic analysis is enabled by default for changed Java files. Disable it when you only want V0-style surface classification:
+Add dependency context:
 
 ```bash
 changeguard pr \
   --repo spring-petclinic/spring-petclinic-microservices \
   --pr 494 \
-  --no-semantic
+  --dependencies
 ```
 
-Structured JSON output:
+Generate/refine cross-service impact candidates:
 
 ```bash
 changeguard pr \
   --repo spring-petclinic/spring-petclinic-microservices \
-  --pr 494 \
-  --json
+  --pr 253 \
+  --impacts
 ```
 
-### Scan a local repository
+Create reviewable verification plans for endpoint-level candidates:
 
 ```bash
-changeguard scan --repo . --base HEAD~1 --head HEAD
+changeguard pr \
+  --repo owner/repository \
+  --pr 123 \
+  --verification-plan
 ```
 
-## Example semantic output
+`--verification-plan` implies semantic, dependency, and impact analysis. It does **not** execute remote build code.
+
+Structured JSON is available with `--json`.
+
+## Build a service dependency graph
+
+```bash
+changeguard graph \
+  --repo spring-petclinic/spring-petclinic-microservices \
+  --ref main
+```
+
+The graph output includes dependency edges and any explicit consumer HTTP calls ChangeGuard can extract.
+
+## Explicit local verification
+
+Remote PR analysis never silently runs project-controlled Maven plugins or scripts.
+
+To execute a targeted consumer-module test run, provide a local workspace explicitly:
+
+```bash
+changeguard verify \
+  --repo /path/to/checked-out/repository \
+  --consumer api-gateway \
+  --module spring-petclinic-api-gateway
+```
+
+The initial Maven command is:
 
 ```text
-spring-petclinic-vets-service/.../VetResource.java
-  status: modified
-  language: java
-  surfaces: java_code, api_contract
-  semantic changes:
-    ENDPOINT_ADDED
-      after:  GET /vets/health | VetResource#health() -> String
+mvn -pl <consumer-module> -am test
 ```
 
-## Architecture direction
+Verification records process evidence: status, exit code, duration, and bounded stdout/stderr tails.
+
+A `PASSED` build does not automatically mean a change is safe. A `FAILED` build does not automatically prove that an impact candidate caused the failure.
+
+See `docs/verification.md` for the execution boundary and `docs/evaluation/public-pr-cases.md` for real public benchmark cases.
+
+## Public benchmark examples
+
+Petclinic PR #494:
+- provider fact: `ENDPOINT_ADDED GET /vets/health`
+- dependent fact: `api-gateway -> vets-service`
+- impact result: zero candidates because the endpoint is additive
+
+Petclinic PR #253:
+- provider facts: request signatures changed for `POST /owners` and `PUT /owners/{ownerId}`
+- V2.1 result: two service-level candidates for `api-gateway`
+- V2.2 observed consumer call: `GET /owners/{ownerId}`
+- refined result: zero active candidates, two suppressed candidates retained for audit
+
+## Architecture
 
 ```mermaid
 flowchart LR
-  PR[GitHub PR / Git refs] --> CG[Change extraction]
-  CG --> M[ChangeManifest]
-  M --> SRC[Full source at base + head]
-  SRC --> AST[Java/Spring AST analyzer]
-  AST --> M
-  M --> G[Dependency + contract graph]
-  G --> O[Agent orchestrator]
-  O --> A1[API contract agent]
-  O --> A2[DB migration agent]
-  O --> A3[Security agent]
-  O --> A4[Test-gap agent]
-  A1 --> V[Sandbox verifier]
-  A2 --> V
-  A3 --> V
-  A4 --> V
-  V --> R[Release-risk report]
+  PR[GitHub PR / Git refs] --> E[Change extraction]
+  E --> S[Java/Spring semantic evidence]
+  S --> G[Service dependency graph]
+  G --> C[Consumer HTTP call evidence]
+  C --> I[Impact candidate refinement]
+  I --> P[Verification plan]
+  P --> V[Explicit local verifier]
+  V --> R[Verification evidence]
+  R --> A[Future agent orchestration]
+  A --> O[Release-risk report]
 ```
+
+## Current non-goals
+
+- claiming that a passing test run proves safety
+- claiming that a failing test run proves causality
+- executing arbitrary remote PR build code automatically
+- using an LLM to parse raw source code
+- assigning arbitrary risk scores
+- mutating target repositories
 
 ## Planned next layers
 
-- richer Spring REST semantics and type resolution
-- security-policy semantic analysis
-- cross-service dependency/contract graph
-- specialized risk agents
-- sandboxed verification
-- benchmark suite with seeded regressions
+- stronger verification: targeted tests, Pact, Testcontainers, sandboxing
+- database migration semantics
+- messaging contract semantics
+- agent orchestration over deterministic evidence
+- benchmark/evaluation suite with precision, recall, false-positive rate, latency, and cost
 - GitHub Check / PR integration
-
-## Non-goals at this stage
-
-- predicting whether a change is "safe"
-- calling an LLM to parse source code
-- opening or modifying pull requests in target repositories
-- assigning arbitrary risk scores
-
-Those features come only after the evidence pipeline is testable.
