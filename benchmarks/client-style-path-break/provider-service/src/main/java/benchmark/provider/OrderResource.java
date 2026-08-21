@@ -23,7 +23,7 @@ import java.lang.annotation.Target;
 }
 
 @RestController
-@RequestMapping("/orders")
+@RequestMapping("/purchases")
 public final class OrderResource {
 
     @GetMapping("/{orderId}")
@@ -32,6 +32,6 @@ public final class OrderResource {
     }
 
     public static boolean serves(String httpMethod, String path) {
-        return "GET".equals(httpMethod) && path.matches("/orders/\\d+");
+        return "GET".equals(httpMethod) && path.matches("/purchases/\\d+");
     }
 }
