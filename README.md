@@ -12,9 +12,9 @@ The project is built around one evidence discipline:
 evidence -> impact inference -> verification -> grounded synthesis
 ```
 
-Deterministic analysis remains the source of truth. LangGraph and an optional model-backed selector operate only on evidence ChangeGuard has already produced.
+Deterministic analysis remains the source of truth. LangGraph and optional model-backed selectors operate only on evidence ChangeGuard has already produced.
 
-## Current milestone: V5.1 grounded model-backed evidence selection
+## Current milestone: V5.2 evaluated grounded evidence selection
 
 The current pipeline can:
 
@@ -31,7 +31,8 @@ The current pipeline can:
 11. explicitly execute those plans only in a user-supplied local workspace,
 12. evaluate deterministic behavior against a versioned labeled REST corpus,
 13. synthesize supplied facts/inferences/verification evidence through LangGraph,
-14. optionally let an OpenAI model select only existing evidence IDs using strict structured output.
+14. optionally let OpenAI or a local Ollama model select only existing evidence IDs using structured output,
+15. evaluate evidence-selection quality separately from deterministic impact accuracy.
 
 The final synthesis wording and claim semantics remain deterministic even when model-backed selection is enabled.
 
@@ -224,9 +225,9 @@ RestTemplate consumer still calls /orders/{orderId}
 => 2 controlled consumer contract failures
 ```
 
-## Controlled benchmark evaluation
+## Controlled deterministic benchmark evaluation
 
-The current corpus is `rest-impact-v3` with 24 labeled cases.
+The current REST corpus is `rest-impact-v3` with 24 labeled cases.
 
 ```bash
 changeguard evaluate
@@ -285,27 +286,72 @@ changeguard synthesize --manifest manifest.json
 
 PowerShell BOM-prefixed UTF-8 JSON is accepted.
 
-## Optional OpenAI evidence selector
+## Model-backed evidence selectors
 
-Install the optional provider dependency:
+The model receives already-derived evidence records and returns only a structured list of evidence IDs. It cannot write the final report. The LangGraph validation node rejects unknown, duplicate, or over-limit IDs before deterministic rendering.
+
+OpenAI is an optional cloud provider. Install the optional dependency, set `OPENAI_API_KEY`, and opt in explicitly:
 
 ```bash
 python -m pip install -e ".[dev,ai]"
-```
 
-Set `OPENAI_API_KEY`, then opt in explicitly:
-
-```bash
 changeguard synthesize \
   --manifest manifest.json \
   --selector openai
 ```
 
-The model receives already-derived evidence records and returns only a strict structured list of evidence IDs. It cannot write the final report. The LangGraph validation node rejects unknown, duplicate, or over-limit IDs before deterministic rendering.
+Ollama provides a local path with no API key or Python provider dependency:
 
-A different model can be selected with `--model`. Synthesis JSON records selector/model provenance and provider-reported input/output token counts when available.
+```powershell
+changeguard synthesize `
+  --manifest manifest.json `
+  --selector ollama `
+  --model llama3.2:3b
+```
 
-See `docs/synthesis.md` and ADRs 0011–0012 for the grounding boundary.
+Synthesis JSON records selector/model provenance and provider-reported input/output token counts when available.
+
+See `docs/synthesis.md` and ADRs 0011–0013 for the grounding boundary and provider decisions.
+
+## V5.2 evidence-selection evaluation
+
+Model-selection quality is measured separately from deterministic impact accuracy with the versioned `synthesis-selection-v1` corpus.
+
+Deterministic baseline:
+
+```powershell
+changeguard evaluate-selector `
+  --selector deterministic `
+  --runs 3 `
+  --details
+```
+
+Local Ollama evaluation:
+
+```powershell
+changeguard evaluate-selector `
+  --selector ollama `
+  --model llama3.2:3b `
+  --runs 3 `
+  --details
+```
+
+The evaluator reports:
+
+- selector success rate,
+- deterministic grounding-guardrail pass rate,
+- required-evidence recall,
+- selection precision,
+- distractor-selection rate,
+- distinct-consumer coverage,
+- verification-evidence retention,
+- mean pairwise Jaccard stability across repeated runs,
+- selector p50/p95 latency,
+- provider input/output token totals when available.
+
+The controlled corpus includes prompt-injection-like repository text and selection-budget pressure above the 12-item cap. `--strict` gates provider/selector availability and grounding only; model-quality thresholds are intentionally not hard-coded yet.
+
+These are **controlled evidence-selection metrics**, not production breakage prediction accuracy. See `docs/selection-evaluation.md` and ADR 0014.
 
 ## Architecture
 
@@ -319,15 +365,18 @@ flowchart LR
   I --> P[Reactor-aware verification plan]
   P --> V[Explicit local verifier]
   V --> R[Verification evidence]
-  I --> B[Versioned benchmark evaluator]
+  I --> B[Deterministic benchmark evaluator]
   I --> L[LangGraph synthesis]
   R --> L
   L --> M{Selector}
   M -->|default| D[Deterministic ranking]
-  M -->|optional| O[OpenAI structured evidence IDs]
+  M -->|optional cloud| O[OpenAI structured evidence IDs]
+  M -->|optional local| Q[Ollama structured evidence IDs]
   D --> X[Guardrail validation]
   O --> X
+  Q --> X
   X --> Y[Deterministic report renderer]
+  M --> SE[Selection benchmark evaluator]
 ```
 
 ## Current non-goals
@@ -343,8 +392,8 @@ flowchart LR
 
 ## Planned next layers
 
-- evaluate model evidence-selection quality against labeled synthesis cases
-- track model latency and token/cost behavior separately from deterministic analysis
+- expand the selection corpus after real model runs expose failure modes
+- bind verification plans to an expected Git revision before any autonomous execution is considered
 - add database migration and messaging contract semantics
 - stronger verification with Pact/Testcontainers/sandboxing
 - narrowly permissioned specialized agents after tool boundaries are explicit

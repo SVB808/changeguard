@@ -12,6 +12,7 @@ from changeguard.java_analyzer import JavaAnalyzerError
 from changeguard.models import VerificationStatus
 from changeguard.remote_scanner import scan_pull_request
 from changeguard.scanner import scan
+from changeguard.selection_evaluation_cli import evaluate_selector_cmd
 from changeguard.synthesis_cli import synthesize_cmd
 from changeguard.verification import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -23,6 +24,7 @@ app = typer.Typer(
     help="ChangeGuard: deterministic change-impact evidence before AI reasoning."
 )
 app.command("evaluate")(evaluate_cmd)
+app.command("evaluate-selector")(evaluate_selector_cmd)
 app.command("synthesize")(synthesize_cmd)
 
 
