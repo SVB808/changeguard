@@ -55,8 +55,8 @@ def _print_dependency_graph(graph, json_output: bool) -> None:
         typer.echo(f"  evidence: {edge.evidence_path} | {edge.evidence}")
 
     if graph.consumer_calls:
-        typer.echo("
-explicit consumer calls:")
+        typer.echo("")
+        typer.echo("explicit consumer calls:")
         for call in graph.consumer_calls:
             typer.echo(
                 f"{call.consumer_service} -> {call.target_service} "
