@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from changeguard.models import (
+    EndpointChangeKind,
     ImpactCandidate,
     ImpactMatchLevel,
     ServiceDependencyGraph,
@@ -94,7 +95,7 @@ def execute_verification_plan(
             check=False,
             timeout=timeout_seconds,
         )
-    except FileNotFoundError as exc:
+    except FileNotFoundError:
         return VerificationResult(
             plan=plan,
             status=VerificationStatus.ERROR,
@@ -147,7 +148,7 @@ def create_maven_module_plan(
         consumer_service=consumer_service,
         consumer_module=consumer_module,
         changed_file="manual",
-        trigger_kind="ENDPOINT_REMOVED",
+        trigger_kind=EndpointChangeKind.ENDPOINT_REMOVED,
         command=["mvn", "-pl", consumer_module, "-am", "test"],
         reason="Explicit local Maven module verification requested by the user.",
     )
@@ -160,7 +161,12 @@ def _validate_workspace(workspace: Path, consumer_module: str) -> str | None:
     if not (workspace / "pom.xml").is_file():
         return f"Verification workspace does not contain a root pom.xml: {workspace}"
 
-    module_path = workspace / consumer_module
+    module_path = (workspace / consumer_module).resolve()
+    try:
+        module_path.relative_to(workspace)
+    except ValueError:
+        return f"Consumer module must remain inside the verification workspace: {consumer_module}"
+
     if not module_path.is_dir():
         return f"Consumer module does not exist in workspace: {consumer_module}"
 
