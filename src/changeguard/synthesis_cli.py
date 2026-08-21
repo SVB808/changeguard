@@ -5,6 +5,11 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
+from changeguard.model_selector import (
+    DEFAULT_OPENAI_MODEL,
+    ModelSelectionError,
+    OpenAIEvidenceSelector,
+)
 from changeguard.models import ChangeManifest, VerificationResult
 from changeguard.synthesis import SynthesisGuardrailError, synthesize_manifest
 
@@ -28,6 +33,16 @@ def synthesize_cmd(
         "--verification-result",
         help="Optional VerificationResult JSON. Repeat for multiple explicit local runs.",
     ),
+    selector_name: str = typer.Option(
+        "deterministic",
+        "--selector",
+        help="Evidence selector: deterministic or openai.",
+    ),
+    model: str = typer.Option(
+        DEFAULT_OPENAI_MODEL,
+        "--model",
+        help="Model used only when --selector openai is chosen.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -41,8 +56,24 @@ def synthesize_cmd(
             VerificationResult.model_validate_json(_read_json_text(path))
             for path in verification_result
         ]
-        report = synthesize_manifest(manifest, results)
-    except (OSError, ValidationError, SynthesisGuardrailError) as exc:
+
+        normalized_selector = selector_name.strip().lower()
+        if normalized_selector == "deterministic":
+            selector = None
+        elif normalized_selector == "openai":
+            selector = OpenAIEvidenceSelector(model=model)
+        else:
+            raise SynthesisGuardrailError(
+                f"Unknown synthesis selector {selector_name!r}; use deterministic or openai."
+            )
+
+        report = synthesize_manifest(manifest, results, selector=selector)
+    except (
+        OSError,
+        ValidationError,
+        SynthesisGuardrailError,
+        ModelSelectionError,
+    ) as exc:
         typer.echo(f"Synthesis input error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
 
@@ -50,10 +81,20 @@ def synthesize_cmd(
         typer.echo(report.model_dump_json(indent=2))
         return
 
+    version = "V5.1" if report.selector != "deterministic" else "V5.0"
     typer.echo(
-        f"ChangeGuard V5.0 synthesis | {report.repo} | "
+        f"ChangeGuard {version} synthesis | {report.repo} | "
         f"{report.base[:12]} -> {report.head[:12]}"
     )
+    selector_line = f"selector: {report.selector}"
+    if report.model:
+        selector_line += f" | model: {report.model}"
+    if report.input_tokens is not None or report.output_tokens is not None:
+        selector_line += (
+            f" | tokens: input={report.input_tokens or 0} "
+            f"output={report.output_tokens or 0}"
+        )
+    typer.echo(selector_line)
     typer.echo(f"headline: {report.headline}")
     typer.echo(
         f"selected evidence: {len(report.evidence)} | "
