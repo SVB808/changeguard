@@ -37,6 +37,37 @@ jobs:
       - name: Run strict benchmark regression gate
         run: changeguard evaluate --strict
 
+  ai-provider-contract:
+    name: Optional AI provider contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install optional AI dependency
+        run: python -m pip install -e ".[ai]"
+
+      - name: Validate Responses API client contract without network access
+        shell: python
+        run: |
+          import inspect
+          from openai import OpenAI
+          from changeguard.model_selector import OpenAIEvidenceSelector
+
+          client = OpenAI(api_key="test-key")
+          parameters = inspect.signature(client.responses.create).parameters
+          required = {"model", "input", "instructions", "text"}
+          missing = sorted(required - set(parameters))
+          assert not missing, f"OpenAI Responses API client is missing parameters: {missing}"
+          assert OpenAIEvidenceSelector.__name__ == "OpenAIEvidenceSelector"
+
   java-analyzer:
     name: Java analyzer
     runs-on: ubuntu-latest

@@ -18,6 +18,9 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
+ai = [
+  "openai>=2.54,<4.0",
+]
 
 [project.scripts]
 changeguard = "changeguard.cli:app"

@@ -42,6 +42,10 @@ class EvidenceItem(BaseModel):
 
 class SynthesisSelection(BaseModel):
     selected_evidence_ids: list[str] = Field(default_factory=list)
+    selector: str = "deterministic"
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class SynthesisReport(BaseModel):
@@ -52,6 +56,10 @@ class SynthesisReport(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     omitted_evidence_count: int = 0
     caveats: list[str] = Field(default_factory=list)
+    selector: str = "deterministic"
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class EvidenceSelector(Protocol):
@@ -63,11 +71,7 @@ class SynthesisGuardrailError(ValueError):
 
 
 class DeterministicEvidenceSelector:
-    """Stable default selector used for CI and offline operation.
-
-    A future model-backed selector can implement the same protocol, but it is only
-    allowed to select evidence IDs that ChangeGuard already produced.
-    """
+    """Stable default selector used for CI and offline operation."""
 
     def select(self, evidence: list[EvidenceItem]) -> SynthesisSelection:
         priority = {
@@ -80,7 +84,8 @@ class DeterministicEvidenceSelector:
             key=lambda item: (priority[item.tier], item.id),
         )
         return SynthesisSelection(
-            selected_evidence_ids=[item.id for item in ordered[:MAX_SELECTED_EVIDENCE]]
+            selected_evidence_ids=[item.id for item in ordered[:MAX_SELECTED_EVIDENCE]],
+            selector="deterministic",
         )
 
 
@@ -274,6 +279,10 @@ def _render_report(
         "Only supplied ChangeGuard evidence is eligible for synthesis; this graph does not inspect new repository content or execute project code."
     ]
 
+    if selection.selector != "deterministic":
+        caveats.append(
+            "Model participation is limited to evidence-ID selection; deterministic guardrails validate every selected ID before rendering."
+        )
     if manifest.suppressed_impact_candidates:
         caveats.append(
             "Suppressed candidates reduce active findings only for parsed explicit call evidence; dynamic or unsupported callers may still exist."
@@ -299,6 +308,10 @@ def _render_report(
         evidence=rendered,
         omitted_evidence_count=max(0, len(evidence) - len(rendered)),
         caveats=caveats,
+        selector=selection.selector,
+        model=selection.model,
+        input_tokens=selection.input_tokens,
+        output_tokens=selection.output_tokens,
     )
 
 
