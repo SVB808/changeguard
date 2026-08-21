@@ -48,6 +48,32 @@ class FakeGraphClient:
         return self.contents.get(path)
 
 
+class NestedGraphClient:
+    def __init__(self):
+        self.paths = [
+            "benchmarks/rest-path-break/spring-petclinic-provider-service/pom.xml",
+            "benchmarks/rest-path-break/spring-petclinic-provider-service/src/main/java/benchmark/provider/OwnerResource.java",
+            "benchmarks/rest-path-break/spring-petclinic-consumer-service/pom.xml",
+            "benchmarks/rest-path-break/spring-petclinic-consumer-service/src/main/java/benchmark/consumer/OwnersServiceClient.java",
+        ]
+        self.contents = {
+            "benchmarks/rest-path-break/spring-petclinic-consumer-service/src/main/java/benchmark/consumer/OwnersServiceClient.java": """
+                class OwnersServiceClient {
+                    Object getOwner(int ownerId) {
+                        return client.get()
+                            .uri("http://provider-service/owners/{ownerId}", ownerId);
+                    }
+                }
+            """,
+        }
+
+    def list_repository_paths(self, repo_full_name: str, ref: str) -> list[str]:
+        return self.paths
+
+    def get_file_text(self, repo_full_name: str, path: str, ref: str) -> str | None:
+        return self.contents.get(path)
+
+
 def test_builds_graph_from_gateway_routes_and_service_urls():
     graph = ServiceDependencyGraphBuilder(client=FakeGraphClient()).build(
         "acme/petclinic",
@@ -98,3 +124,30 @@ def test_resolves_service_ownership_and_direct_dependents():
     ) == "vets-service"
     assert graph.direct_dependents("vets-service") == ["api-gateway"]
     assert graph.direct_dependents("api-gateway") == []
+
+
+def test_discovers_nested_service_modules_and_call_evidence():
+    graph = ServiceDependencyGraphBuilder(client=NestedGraphClient()).build(
+        "acme/changeguard",
+        "benchmark",
+    )
+
+    modules = {node.name: node.module_path for node in graph.nodes}
+    assert modules == {
+        "consumer-service": (
+            "benchmarks/rest-path-break/spring-petclinic-consumer-service"
+        ),
+        "provider-service": (
+            "benchmarks/rest-path-break/spring-petclinic-provider-service"
+        ),
+    }
+    assert graph.service_for_path(
+        "benchmarks/rest-path-break/spring-petclinic-provider-service/"
+        "src/main/java/benchmark/provider/OwnerResource.java"
+    ) == "provider-service"
+    assert len(graph.consumer_calls) == 1
+    call = graph.consumer_calls[0]
+    assert call.consumer_service == "consumer-service"
+    assert call.target_service == "provider-service"
+    assert call.http_method == "GET"
+    assert call.path == "/owners/{ownerId}"
