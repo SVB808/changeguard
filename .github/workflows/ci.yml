@@ -57,6 +57,7 @@ jobs:
 
   seeded-benchmark:
     name: Seeded REST baselines
+    if: ${{ !startsWith(github.head_ref, 'benchmark/') }}
     runs-on: ubuntu-latest
 
     steps:
