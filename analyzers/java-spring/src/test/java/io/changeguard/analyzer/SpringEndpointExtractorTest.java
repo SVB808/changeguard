@@ -122,4 +122,21 @@ class SpringEndpointExtractorTest {
 
         assertEquals("/api/health", endpoint.path());
     }
+
+    @Test
+    void parsesJava17RecordSourceWithoutTreatingItAsAnEndpoint() {
+        String source = """
+                package example;
+
+                public record OwnerRequest(
+                        String firstName,
+                        String lastName,
+                        String address,
+                        String city,
+                        String telephone
+                ) {}
+                """;
+
+        assertEquals(List.of(), extractor.extract(source));
+    }
 }

@@ -1,6 +1,5 @@
 package io.changeguard.analyzer;
 
-import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
@@ -27,7 +26,7 @@ public final class SpringEndpointExtractor {
             return List.of();
         }
 
-        CompilationUnit unit = StaticJavaParser.parse(source);
+        CompilationUnit unit = JavaSourceParser.parse(source);
         List<Endpoint> endpoints = new ArrayList<>();
 
         for (ClassOrInterfaceDeclaration type : unit.findAll(ClassOrInterfaceDeclaration.class)) {

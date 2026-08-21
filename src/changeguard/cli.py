@@ -56,12 +56,45 @@ def _print_dependency_graph(graph, json_output: bool) -> None:
         typer.echo(f"  evidence: {edge.evidence_path} | {edge.evidence}")
 
 
+def _print_impact_candidates(manifest) -> None:
+    typer.echo(f"impact candidates: {manifest.impact_candidate_count}")
+    if not manifest.impact_candidates:
+        typer.echo("  none")
+        return
+
+    for candidate in manifest.impact_candidates:
+        typer.echo(f"  {candidate.kind.value}")
+        typer.echo(
+            f"    provider: {candidate.provider_service} | "
+            f"consumer: {candidate.consumer_service}"
+        )
+        typer.echo(f"    changed file: {candidate.changed_file}")
+        typer.echo(f"    trigger: {candidate.trigger_kind.value}")
+        if candidate.before is not None:
+            typer.echo("    before: " + _format_endpoint(candidate.before))
+        if candidate.after is not None:
+            typer.echo("    after:  " + _format_endpoint(candidate.after))
+        typer.echo(f"    match level: {candidate.match_level.value}")
+        typer.echo(f"    reason: {candidate.reason}")
+        for edge in candidate.dependency_evidence:
+            typer.echo(
+                f"    dependency evidence: [{edge.kind.value}] "
+                f"{edge.evidence_path} | {edge.evidence}"
+            )
+
+
 def _print_manifest(manifest, json_output: bool) -> None:
     if json_output:
         typer.echo(manifest.model_dump_json(indent=2))
         return
 
-    version = "V2" if manifest.dependency_graph is not None else "V1"
+    if manifest.impact_analysis_enabled:
+        version = "V2.1"
+    elif manifest.dependency_graph is not None:
+        version = "V2"
+    else:
+        version = "V1"
+
     typer.echo(
         f"ChangeGuard {version} | {manifest.base[:12]} -> {manifest.head[:12]} | "
         f"{manifest.changed_file_count} changed file(s)"
@@ -121,6 +154,10 @@ def _print_manifest(manifest, json_output: bool) -> None:
                 if security_change.after is not None:
                     _print_security_policy(security_change.after, "after ")
 
+        typer.echo("")
+
+    if manifest.impact_analysis_enabled:
+        _print_impact_candidates(manifest)
         typer.echo("")
 
 
@@ -202,6 +239,15 @@ def scan_pr_cmd(
         "--dependencies/--no-dependencies",
         help="Build a repository service dependency graph and attach direct dependents.",
     ),
+    impacts: bool = typer.Option(
+        False,
+        "--impacts/--no-impacts",
+        help=(
+            "Generate service-level impact candidates by joining compatibility-sensitive "
+            "endpoint changes with direct dependency evidence. Implies semantic and "
+            "dependency analysis."
+        ),
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -215,6 +261,7 @@ def scan_pr_cmd(
             pr_number,
             semantic_analysis=semantic,
             dependency_analysis=dependencies,
+            impact_analysis=impacts,
         )
     except GitHubAPIError as exc:
         typer.echo(f"GitHub error: {exc}", err=True)
