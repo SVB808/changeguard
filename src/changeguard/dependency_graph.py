@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+from collections import defaultdict
+from collections.abc import Callable
 
 from changeguard.github_client import GitHubClient
 from changeguard.models import (
@@ -12,7 +15,6 @@ from changeguard.models import (
 )
 
 
-MODULE_PREFIX = "spring-petclinic-"
 CONFIG_PATH = re.compile(
     r"(?:^|/)src/main/resources/application[^/]*\.(?:yml|yaml|properties)$",
     re.IGNORECASE,
@@ -29,18 +31,31 @@ EXPLICIT_HTTP_CALL = re.compile(
     r"(?:\?[^\"#]*)?\"",
     re.IGNORECASE | re.DOTALL,
 )
+DOTTED_APPLICATION_NAME = re.compile(
+    r"^\s*spring\.application\.name\s*[:=]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+SERVICE_ROLE_SUFFIX = re.compile(r"(?:service|server|gateway)$", re.IGNORECASE)
+LITERAL_SERVICE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+ENV_DEFAULT = re.compile(r"^\$\{[^}:]+:([^}]+)\}$")
 
 
 class ServiceDependencyGraphBuilder:
     """Build deterministic cross-service dependency and call-site evidence.
 
-    V2 starts with high-confidence service dependency evidence:
+    Service discovery is repository-agnostic for Maven monorepos. Maven module
+    directories come from repository `pom.xml` paths. A literal
+    `spring.application.name` in `application*.yml|yaml|properties` is preferred as
+    service identity. When no literal name exists, the module basename is used, with
+    a conservative sibling-prefix fallback for conventional `*-service`, `*-server`,
+    and `*-gateway` module groups.
+
+    High-confidence dependency evidence currently includes:
     - Spring Cloud Gateway `lb://service` routes
     - explicit service URLs in application configuration
     - explicit service URLs in Java classes named Client/Gateway/Connector
 
-    V2.2 additionally extracts literal HTTP call sites such as
-    `.get().uri("http://customers-service/owners/{ownerId}", ownerId)`.
+    Literal WebClient-style HTTP method + route calls are extracted when possible.
     Dynamic URI construction is intentionally left unresolved rather than guessed.
     """
 
@@ -48,8 +63,15 @@ class ServiceDependencyGraphBuilder:
         self.client = client or GitHubClient()
 
     def build(self, repo_full_name: str, ref: str) -> ServiceDependencyGraph:
-        paths = self.client.list_repository_paths(repo_full_name, ref)
-        nodes = self._discover_nodes(paths)
+        paths = [path.replace("\\", "/") for path in self.client.list_repository_paths(repo_full_name, ref)]
+        content_cache: dict[str, str | None] = {}
+
+        def read_text(path: str) -> str | None:
+            if path not in content_cache:
+                content_cache[path] = self.client.get_file_text(repo_full_name, path, ref)
+            return content_cache[path]
+
+        nodes = self._discover_nodes(paths, read_text)
         known_services = {node.name for node in nodes}
         edges: list[DependencyEdge] = []
         consumer_calls: list[ConsumerHttpCall] = []
@@ -64,7 +86,7 @@ class ServiceDependencyGraphBuilder:
             if source is None:
                 continue
 
-            content = self.client.get_file_text(repo_full_name, path, ref)
+            content = read_text(path)
             if content is None:
                 continue
 
@@ -92,32 +114,194 @@ class ServiceDependencyGraphBuilder:
             consumer_calls=self._dedupe_calls(consumer_calls),
         )
 
-    def _discover_nodes(self, paths: list[str]) -> list[ServiceNode]:
-        """Discover Spring service modules at any repository depth.
-
-        The initial Petclinic implementation assumed every service lived directly at
-        repository root. Seeded benchmark workspaces and real monorepos can nest
-        Maven modules, so the module directory containing a matching `pom.xml` is now
-        preserved as the service's full repository-relative module path.
-        """
-        modules: dict[str, str] = {}
-        for path in paths:
-            normalized = path.replace("\\", "/")
-            parts = normalized.split("/")
-            if len(parts) < 2 or parts[-1] != "pom.xml":
-                continue
-
-            module_name = parts[-2]
-            if not module_name.startswith(MODULE_PREFIX):
-                continue
-
-            module_path = "/".join(parts[:-1])
-            modules[module_path] = module_name.removeprefix(MODULE_PREFIX)
-
-        return [
-            ServiceNode(name=name, module_path=module_path)
-            for module_path, name in sorted(modules.items())
+    def _discover_nodes(
+        self,
+        paths: list[str],
+        read_text: Callable[[str], str | None],
+    ) -> list[ServiceNode]:
+        """Discover Maven-backed service modules without repository-specific naming."""
+        all_modules = sorted(
+            {
+                path[: -len("/pom.xml")]
+                for path in paths
+                if path.endswith("/pom.xml")
+            }
+        )
+        modules = [
+            module
+            for module in all_modules
+            if self._is_module_candidate(module, all_modules, paths)
         ]
+        fallback_names = self._fallback_module_names(modules)
+        nodes: list[ServiceNode] = []
+
+        for module in modules:
+            application_name = self._application_name_for_module(
+                module,
+                modules,
+                paths,
+                read_text,
+            )
+            nodes.append(
+                ServiceNode(
+                    name=application_name or fallback_names[module],
+                    module_path=module,
+                )
+            )
+
+        return sorted(nodes, key=lambda node: (node.module_path, node.name))
+
+    @staticmethod
+    def _is_module_candidate(
+        module: str,
+        all_modules: list[str],
+        paths: list[str],
+    ) -> bool:
+        """Exclude pure aggregator modules while retaining leaf or source modules."""
+        module_prefix = module.rstrip("/") + "/"
+        has_child_module = any(
+            other != module and other.startswith(module_prefix)
+            for other in all_modules
+        )
+        has_main_source = any(
+            path.startswith(module_prefix + "src/main/")
+            for path in paths
+        )
+        return has_main_source or not has_child_module
+
+    def _application_name_for_module(
+        self,
+        module: str,
+        modules: list[str],
+        paths: list[str],
+        read_text: Callable[[str], str | None],
+    ) -> str | None:
+        candidates = [
+            path
+            for path in paths
+            if CONFIG_PATH.search(path)
+            and self._module_for_path(modules, path) == module
+        ]
+        for path in sorted(candidates):
+            content = read_text(path)
+            if content is None:
+                continue
+            application_name = self._extract_application_name(content)
+            if application_name is not None:
+                return application_name
+        return None
+
+    @classmethod
+    def _extract_application_name(cls, content: str) -> str | None:
+        dotted = DOTTED_APPLICATION_NAME.search(content)
+        if dotted:
+            return cls._literal_service_name(dotted.group(1))
+
+        lines = content.splitlines()
+        spring_index = cls._yaml_key_index(lines, "spring")
+        if spring_index is None:
+            return None
+        spring_indent = cls._indent(lines[spring_index])
+
+        application_index = cls._yaml_key_index(
+            lines,
+            "application",
+            start=spring_index + 1,
+            parent_indent=spring_indent,
+        )
+        if application_index is None:
+            return None
+        application_indent = cls._indent(lines[application_index])
+
+        name_index = cls._yaml_key_index(
+            lines,
+            "name",
+            start=application_index + 1,
+            parent_indent=application_indent,
+            require_value=True,
+        )
+        if name_index is None:
+            return None
+
+        _, raw_value = lines[name_index].split(":", 1)
+        return cls._literal_service_name(raw_value)
+
+    @classmethod
+    def _yaml_key_index(
+        cls,
+        lines: list[str],
+        key: str,
+        start: int = 0,
+        parent_indent: int | None = None,
+        require_value: bool = False,
+    ) -> int | None:
+        pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*(.*?)\s*$", re.IGNORECASE)
+        for index in range(start, len(lines)):
+            line = lines[index]
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = cls._indent(line)
+            if parent_indent is not None and indent <= parent_indent:
+                return None
+            match = pattern.match(line)
+            if not match:
+                continue
+            value = match.group(1).split("#", 1)[0].strip()
+            if require_value and not value:
+                continue
+            return index
+        return None
+
+    @staticmethod
+    def _indent(line: str) -> int:
+        return len(line) - len(line.lstrip(" "))
+
+    @staticmethod
+    def _literal_service_name(raw_value: str) -> str | None:
+        value = raw_value.split("#", 1)[0].strip().strip("\"'")
+        env_default = ENV_DEFAULT.fullmatch(value)
+        if env_default:
+            value = env_default.group(1).strip().strip("\"'")
+        if not value or not LITERAL_SERVICE_NAME.fullmatch(value):
+            return None
+        return value
+
+    @staticmethod
+    def _fallback_module_names(modules: list[str]) -> dict[str, str]:
+        """Use module basenames, stripping only safe conventional sibling prefixes.
+
+        Example: sibling modules `acme-orders-service` and `acme-api-gateway`
+        can become `orders-service` and `api-gateway`. Prefix stripping is skipped
+        unless every stripped sibling still ends in service/server/gateway, avoiding
+        broad guesses for arbitrary library module groups.
+        """
+        groups: dict[str, list[str]] = defaultdict(list)
+        for module in modules:
+            parent, _, _ = module.rpartition("/")
+            groups[parent].append(module)
+
+        names: dict[str, str] = {}
+        for siblings in groups.values():
+            basenames = [module.rsplit("/", 1)[-1] for module in siblings]
+            prefix = os.path.commonprefix(basenames)
+            prefix = prefix[: prefix.rfind("-") + 1] if "-" in prefix else ""
+            stripped = [name[len(prefix) :] if prefix else name for name in basenames]
+            can_strip = (
+                len(siblings) >= 2
+                and bool(prefix)
+                and all(name and SERVICE_ROLE_SUFFIX.search(name) for name in stripped)
+            )
+
+            for module, basename, stripped_name in zip(
+                siblings,
+                basenames,
+                stripped,
+                strict=True,
+            ):
+                names[module] = stripped_name if can_strip else basename
+
+        return names
 
     def _extract_edges(
         self,
@@ -202,17 +386,24 @@ class ServiceDependencyGraphBuilder:
         return normalized
 
     @staticmethod
-    def _service_for_path(nodes: list[ServiceNode], path: str) -> str | None:
+    def _module_for_path(modules: list[str], path: str) -> str | None:
         normalized = path.replace("\\", "/")
         matching = [
-            node
-            for node in nodes
-            if normalized.startswith(node.module_path.rstrip("/") + "/")
+            module
+            for module in modules
+            if normalized.startswith(module.rstrip("/") + "/")
         ]
         if not matching:
             return None
-        matching.sort(key=lambda node: len(node.module_path), reverse=True)
-        return matching[0].name
+        return max(matching, key=len)
+
+    @classmethod
+    def _service_for_path(cls, nodes: list[ServiceNode], path: str) -> str | None:
+        modules = [node.module_path for node in nodes]
+        module = cls._module_for_path(modules, path)
+        if module is None:
+            return None
+        return next(node.name for node in nodes if node.module_path == module)
 
     @staticmethod
     def _dedupe_edges(edges: list[DependencyEdge]) -> list[DependencyEdge]:
