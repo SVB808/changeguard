@@ -1,0 +1,74 @@
+name: ChangeGuard CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install ChangeGuard
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run Python tests
+        run: pytest
+
+      - name: Run strict benchmark regression gate
+        run: changeguard evaluate --strict
+
+  java-analyzer:
+    name: Java analyzer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Test and package Java/Spring analyzer
+        run: mvn -f analyzers/java-spring/pom.xml package
+
+  seeded-benchmark:
+    name: Seeded REST baseline
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Verify seeded benchmark baseline stays green
+        run: mvn -f benchmarks/rest-path-break/pom.xml test
