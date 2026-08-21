@@ -12,9 +12,9 @@ ChangeGuard deliberately separates three stages:
 evidence -> impact inference -> verification
 ```
 
-There is still **no LLM in the current implementation**. Deterministic evidence, impact refinement, and verification boundaries are being built first so later agents have something measurable to reason over.
+There is still **no LLM in the current implementation**. Deterministic evidence, impact refinement, verification, and evaluation are being built first so later agents have something measurable to reason over.
 
-## Current milestone: V3.0 targeted verification
+## Current milestone: V4.0 benchmark evaluation
 
 The current pipeline can:
 
@@ -27,7 +27,8 @@ The current pipeline can:
 7. join compatibility-sensitive provider changes with consumer evidence,
 8. suppress unsupported service-level candidates without deleting their audit trail,
 9. create targeted Maven verification plans for endpoint-level candidates,
-10. explicitly execute those plans only in a user-supplied local workspace.
+10. explicitly execute those plans only in a user-supplied local workspace,
+11. evaluate impact/refinement behavior against a versioned labeled corpus.
 
 ## Deterministic evidence currently supported
 
@@ -189,7 +190,44 @@ Verification records process evidence: status, exit code, duration, and bounded 
 
 A `PASSED` build does not automatically mean a change is safe. A `FAILED` build does not automatically prove that an impact candidate caused the failure.
 
-See `docs/verification.md` for the execution boundary and `docs/evaluation/public-pr-cases.md` for real public benchmark cases.
+The seeded REST path-break benchmark demonstrates the full deterministic vertical: provider path change -> endpoint-level consumer match -> targeted Maven plan -> failing consumer contract test.
+
+## Run the V4 benchmark evaluator
+
+The first versioned corpus is `benchmarks/evaluation/rest-impact-v1.json`.
+
+```bash
+changeguard evaluate
+```
+
+Show case-level outcomes:
+
+```bash
+changeguard evaluate --details
+```
+
+Machine-readable output:
+
+```bash
+changeguard evaluate --json
+```
+
+CI-style mismatch failure:
+
+```bash
+changeguard evaluate --strict
+```
+
+The evaluator reports:
+- impact-detection TP/FP/TN/FN, precision, recall, and false-positive rate,
+- endpoint-evidence precision/recall/FPR,
+- verification-plan decision accuracy,
+- p50/p95 in-process deterministic-core latency,
+- optional per-case expected-versus-actual evidence disposition.
+
+These are **controlled corpus metrics**, not claims of production accuracy. The latency numbers exclude GitHub network access, JVM parsing, Maven execution, and future model inference.
+
+See `docs/verification.md`, `docs/evaluation.md`, and `docs/evaluation/public-pr-cases.md` for the design and benchmark boundaries.
 
 ## Public benchmark examples
 
@@ -204,6 +242,12 @@ Petclinic PR #253:
 - V2.2 observed consumer call: `GET /owners/{ownerId}`
 - refined result: zero active candidates, two suppressed candidates retained for audit
 
+Seeded ChangeGuard PR #9:
+- provider fact: path moved from `GET /owners/{ownerId}` to `GET /customers/{ownerId}`
+- consumer fact: `consumer-service` still calls `GET /owners/{ownerId}`
+- impact result: one endpoint-level candidate
+- verification result: consumer Maven contract test fails on the changed benchmark workspace
+
 ## Architecture
 
 ```mermaid
@@ -216,6 +260,7 @@ flowchart LR
   I --> P[Verification plan]
   P --> V[Explicit local verifier]
   V --> R[Verification evidence]
+  I --> B[Versioned benchmark evaluator]
   R --> A[Future agent orchestration]
   A --> O[Release-risk report]
 ```
@@ -224,6 +269,7 @@ flowchart LR
 
 - claiming that a passing test run proves safety
 - claiming that a failing test run proves causality
+- claiming small controlled-corpus scores are production accuracy
 - executing arbitrary remote PR build code automatically
 - using an LLM to parse raw source code
 - assigning arbitrary risk scores
@@ -231,9 +277,10 @@ flowchart LR
 
 ## Planned next layers
 
+- larger seeded benchmark corpus and per-risk-class evaluation
 - stronger verification: targeted tests, Pact, Testcontainers, sandboxing
 - database migration semantics
 - messaging contract semantics
 - agent orchestration over deterministic evidence
-- benchmark/evaluation suite with precision, recall, false-positive rate, latency, and cost
+- end-to-end latency/cost evaluation once those layers exist
 - GitHub Check / PR integration
