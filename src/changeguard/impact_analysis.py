@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
+
 from changeguard.models import (
+    ConsumerHttpCall,
     EndpointChangeKind,
     FileChange,
     ImpactCandidate,
+    ImpactMatchLevel,
     ServiceDependencyGraph,
+    SpringEndpoint,
 )
 
 
@@ -27,16 +32,18 @@ COMPATIBILITY_SENSITIVE_ENDPOINT_CHANGES: dict[EndpointChangeKind, str] = {
 }
 
 
+NO_EXACT_CALL_REASON = (
+    "Explicit literal HTTP calls to the provider were found for this consumer, but none "
+    "match the changed endpoint's previous method and path. The service-level candidate "
+    "is suppressed from the active list; dynamic or unparsed call sites may still exist."
+)
+
+
 def generate_impact_candidates(
     files: list[FileChange],
     graph: ServiceDependencyGraph,
 ) -> list[ImpactCandidate]:
-    """Join semantic contract changes with explicit service dependency evidence.
-
-    V2.1 intentionally generates *candidates*, not breakage claims. The graph currently
-    proves only that one service depends on another at service scope. Endpoint-level
-    call-site matching and runtime verification are later stages.
-    """
+    """Join compatibility-sensitive semantic changes with service dependencies."""
     candidates: list[ImpactCandidate] = []
 
     for file in files:
@@ -67,14 +74,89 @@ def generate_impact_candidates(
                     )
                 )
 
-    return sorted(
-        candidates,
-        key=lambda candidate: (
-            candidate.provider_service,
+    return sorted(candidates, key=_candidate_sort_key)
+
+
+def refine_impact_candidates(
+    candidates: list[ImpactCandidate],
+    graph: ServiceDependencyGraph,
+) -> tuple[list[ImpactCandidate], list[ImpactCandidate]]:
+    """Use explicit consumer call sites to upgrade or suppress service-level candidates.
+
+    No parsed calls means the service-level candidate remains active. When literal calls
+    do exist for the consumer/provider pair, an exact method+route match upgrades the
+    candidate to endpoint scope. If none match, the candidate is suppressed but retained
+    separately so the decision remains auditable.
+    """
+    active: list[ImpactCandidate] = []
+    suppressed: list[ImpactCandidate] = []
+
+    for candidate in candidates:
+        calls = graph.calls_between(
             candidate.consumer_service,
-            candidate.changed_file,
-            candidate.trigger_kind.value,
-            candidate.before.path if candidate.before is not None else "",
-            candidate.after.path if candidate.after is not None else "",
-        ),
+            candidate.provider_service,
+        )
+        if not calls:
+            active.append(candidate)
+            continue
+
+        endpoint = candidate.before or candidate.after
+        if endpoint is None:
+            active.append(candidate)
+            continue
+
+        exact_calls = [call for call in calls if _call_matches_endpoint(call, endpoint)]
+        if exact_calls:
+            active.append(
+                candidate.model_copy(
+                    update={
+                        "match_level": ImpactMatchLevel.ENDPOINT,
+                        "consumer_call_evidence": exact_calls,
+                        "reason": (
+                            candidate.reason
+                            + " Exact consumer HTTP call evidence matches the previous contract."
+                        ),
+                    }
+                )
+            )
+        else:
+            suppressed.append(
+                candidate.model_copy(
+                    update={
+                        "consumer_call_evidence": calls,
+                        "suppression_reason": NO_EXACT_CALL_REASON,
+                    }
+                )
+            )
+
+    return (
+        sorted(active, key=_candidate_sort_key),
+        sorted(suppressed, key=_candidate_sort_key),
+    )
+
+
+def _call_matches_endpoint(call: ConsumerHttpCall, endpoint: SpringEndpoint) -> bool:
+    method_matches = (
+        endpoint.http_method == "ANY"
+        or call.http_method.upper() == endpoint.http_method.upper()
+    )
+    return method_matches and _normalize_route(call.path) == _normalize_route(endpoint.path)
+
+
+def _normalize_route(path: str) -> str:
+    route = path.split("?", 1)[0].strip()
+    route = "/" + route.lstrip("/")
+    if len(route) > 1:
+        route = route.rstrip("/")
+    return re.sub(r"\{[^/{}]+\}", "{}", route)
+
+
+def _candidate_sort_key(candidate: ImpactCandidate) -> tuple[str, str, str, str, str, str]:
+    return (
+        candidate.provider_service,
+        candidate.consumer_service,
+        candidate.changed_file,
+        candidate.trigger_kind.value,
+        candidate.before.path if candidate.before is not None else "",
+        candidate.after.path if candidate.after is not None else "",
     )
