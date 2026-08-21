@@ -7,6 +7,7 @@ from changeguard.github_client import GitHubAPIError, GitHubChangedFile, GitHubC
 from changeguard.impact_analysis import generate_impact_candidates, refine_impact_candidates
 from changeguard.java_analyzer import JavaSpringAnalyzer
 from changeguard.models import ChangeManifest, FileChange, ServiceDependencyGraph
+from changeguard.verification import build_verification_plans
 
 
 GITHUB_STATUS_TO_GIT = {
@@ -29,12 +30,14 @@ def scan_pull_request(
     dependency_graph_builder: ServiceDependencyGraphBuilder | None = None,
     dependency_analysis: bool = False,
     impact_analysis: bool = False,
+    verification_planning: bool = False,
 ) -> ChangeManifest:
     client = client or GitHubClient()
     pull_request = client.get_pull_request(repo_full_name, pr_number)
 
-    run_semantic_analysis = semantic_analysis or impact_analysis
-    run_dependency_analysis = dependency_analysis or impact_analysis
+    run_impact_analysis = impact_analysis or verification_planning
+    run_semantic_analysis = semantic_analysis or run_impact_analysis
+    run_dependency_analysis = dependency_analysis or run_impact_analysis
 
     analyzer = semantic_analyzer
     if run_semantic_analysis and analyzer is None:
@@ -75,10 +78,17 @@ def scan_pull_request(
 
     impact_candidates = []
     suppressed_impact_candidates = []
-    if impact_analysis and dependency_graph is not None:
+    if run_impact_analysis and dependency_graph is not None:
         service_candidates = generate_impact_candidates(files, dependency_graph)
         impact_candidates, suppressed_impact_candidates = refine_impact_candidates(
             service_candidates,
+            dependency_graph,
+        )
+
+    verification_plans = []
+    if verification_planning and dependency_graph is not None:
+        verification_plans = build_verification_plans(
+            impact_candidates,
             dependency_graph,
         )
 
@@ -88,9 +98,11 @@ def scan_pull_request(
         head=pull_request.head_sha,
         files=files,
         dependency_graph=dependency_graph,
-        impact_analysis_enabled=impact_analysis,
+        impact_analysis_enabled=run_impact_analysis,
         impact_candidates=impact_candidates,
         suppressed_impact_candidates=suppressed_impact_candidates,
+        verification_planning_enabled=verification_planning,
+        verification_plans=verification_plans,
     )
 
 
