@@ -23,7 +23,7 @@ import java.lang.annotation.Target;
 }
 
 @RestController
-@RequestMapping("/owners")
+@RequestMapping("/customers")
 public final class OwnerResource {
 
     @GetMapping("/{ownerId}")
@@ -32,6 +32,6 @@ public final class OwnerResource {
     }
 
     public static boolean serves(String httpMethod, String path) {
-        return "GET".equals(httpMethod) && path.matches("/owners/\\d+");
+        return "GET".equals(httpMethod) && path.matches("/customers/\\d+");
     }
 }
