@@ -110,4 +110,4 @@ def test_synthesize_rejects_unknown_selector(tmp_path):
     )
 
     assert result.exit_code == 2
-    assert "use deterministic or openai" in result.stdout
+    assert "use deterministic or openai" in result.stderr
