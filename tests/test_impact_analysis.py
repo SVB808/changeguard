@@ -78,6 +78,20 @@ def _call(method: str, path: str) -> ConsumerHttpCall:
     )
 
 
+def _removed_file(path: str, method: str = "GET") -> FileChange:
+    return FileChange(
+        status=ChangeStatus.MODIFIED,
+        path="spring-petclinic-customers-service/src/main/java/example/OwnerResource.java",
+        service="customers-service",
+        semantic_changes=[
+            EndpointSemanticChange(
+                kind=EndpointChangeKind.ENDPOINT_REMOVED,
+                before=_endpoint(path, method=method),
+            )
+        ],
+    )
+
+
 def test_endpoint_addition_does_not_create_impact_candidate():
     file = FileChange(
         status=ChangeStatus.MODIFIED,
@@ -154,17 +168,7 @@ def test_path_change_creates_candidate_but_unrelated_service_does_not():
 
 
 def test_exact_consumer_call_upgrades_candidate_to_endpoint_match():
-    file = FileChange(
-        status=ChangeStatus.MODIFIED,
-        path="spring-petclinic-customers-service/src/main/java/example/OwnerResource.java",
-        service="customers-service",
-        semantic_changes=[
-            EndpointSemanticChange(
-                kind=EndpointChangeKind.ENDPOINT_REMOVED,
-                before=_endpoint("/owners/{ownerId}", method="GET"),
-            )
-        ],
-    )
+    file = _removed_file("/owners/{ownerId}")
     graph = _graph([_call("GET", "/owners/{id}")])
 
     service_candidates = generate_impact_candidates([file], graph)
@@ -209,3 +213,50 @@ def test_non_matching_explicit_call_suppresses_service_level_candidate():
     assert suppressed[0].match_level == ImpactMatchLevel.SERVICE
     assert suppressed[0].suppression_reason is not None
     assert suppressed[0].consumer_call_evidence[0].http_method == "GET"
+
+
+def test_query_string_and_variable_name_do_not_hide_endpoint_match():
+    file = _removed_file("/owners/{ownerId}")
+    graph = _graph([_call("GET", "/owners/{id}?expand=pets")])
+
+    service_candidates = generate_impact_candidates([file], graph)
+    active, suppressed = refine_impact_candidates(service_candidates, graph)
+
+    assert suppressed == []
+    assert len(active) == 1
+    assert active[0].match_level == ImpactMatchLevel.ENDPOINT
+
+
+def test_any_method_endpoint_matches_concrete_consumer_method():
+    file = _removed_file("/events/{eventId}", method="ANY")
+    graph = _graph([_call("POST", "/events/{id}")])
+
+    service_candidates = generate_impact_candidates([file], graph)
+    active, suppressed = refine_impact_candidates(service_candidates, graph)
+
+    assert suppressed == []
+    assert len(active) == 1
+    assert active[0].match_level == ImpactMatchLevel.ENDPOINT
+
+
+def test_recursive_spring_wildcard_matches_nested_consumer_route():
+    file = _removed_file("/files/**")
+    graph = _graph([_call("GET", "/files/reports/2026/summary")])
+
+    service_candidates = generate_impact_candidates([file], graph)
+    active, suppressed = refine_impact_candidates(service_candidates, graph)
+
+    assert suppressed == []
+    assert len(active) == 1
+    assert active[0].match_level == ImpactMatchLevel.ENDPOINT
+
+
+def test_single_spring_wildcard_does_not_cross_path_segment():
+    file = _removed_file("/files/*/metadata")
+    graph = _graph([_call("GET", "/files/a/b/metadata")])
+
+    service_candidates = generate_impact_candidates([file], graph)
+    active, suppressed = refine_impact_candidates(service_candidates, graph)
+
+    assert active == []
+    assert len(suppressed) == 1
