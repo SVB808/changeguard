@@ -43,6 +43,7 @@ class SecurityPolicyChangeKind(str, Enum):
 class DependencyKind(str, Enum):
     GATEWAY_ROUTE = "gateway_route"
     SERVICE_URL = "service_url"
+    DECLARATIVE_CLIENT = "declarative_client"
     CONFIG_IMPORT = "config_import"
 
 
