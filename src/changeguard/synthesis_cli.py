@@ -6,8 +6,11 @@ import typer
 from pydantic import ValidationError
 
 from changeguard.model_selector import (
+    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OLLAMA_URL,
     DEFAULT_OPENAI_MODEL,
     ModelSelectionError,
+    OllamaEvidenceSelector,
     OpenAIEvidenceSelector,
 )
 from changeguard.models import ChangeManifest, VerificationResult
@@ -36,12 +39,20 @@ def synthesize_cmd(
     selector_name: str = typer.Option(
         "deterministic",
         "--selector",
-        help="Evidence selector: deterministic or openai.",
+        help="Evidence selector: deterministic, openai, or ollama.",
     ),
-    model: str = typer.Option(
-        DEFAULT_OPENAI_MODEL,
+    model: str | None = typer.Option(
+        None,
         "--model",
-        help="Model used only when --selector openai is chosen.",
+        help=(
+            "Model override for a model-backed selector. Defaults to "
+            f"{DEFAULT_OPENAI_MODEL} for OpenAI or {DEFAULT_OLLAMA_MODEL} for Ollama."
+        ),
+    ),
+    ollama_url: str = typer.Option(
+        DEFAULT_OLLAMA_URL,
+        "--ollama-url",
+        help="Ollama API base URL used only with --selector ollama.",
     ),
     json_output: bool = typer.Option(
         False,
@@ -61,10 +72,16 @@ def synthesize_cmd(
         if normalized_selector == "deterministic":
             selector = None
         elif normalized_selector == "openai":
-            selector = OpenAIEvidenceSelector(model=model)
+            selector = OpenAIEvidenceSelector(model=model or DEFAULT_OPENAI_MODEL)
+        elif normalized_selector == "ollama":
+            selector = OllamaEvidenceSelector(
+                model=model or DEFAULT_OLLAMA_MODEL,
+                base_url=ollama_url,
+            )
         else:
             raise SynthesisGuardrailError(
-                f"Unknown synthesis selector {selector_name!r}; use deterministic or openai."
+                f"Unknown synthesis selector {selector_name!r}; use deterministic, "
+                "openai, or ollama."
             )
 
         report = synthesize_manifest(manifest, results, selector=selector)
