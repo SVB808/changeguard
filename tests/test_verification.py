@@ -1,11 +1,9 @@
 import subprocess
 
 from changeguard.models import (
-    ChangeStatus,
     DependencyEdge,
     DependencyKind,
     EndpointChangeKind,
-    FileChange,
     ImpactCandidate,
     ImpactMatchLevel,
     ServiceDependencyGraph,
@@ -15,6 +13,7 @@ from changeguard.models import (
 )
 from changeguard.verification import (
     build_verification_plans,
+    create_maven_module_plan,
     execute_verification_plan,
 )
 
@@ -178,3 +177,20 @@ def test_invalid_workspace_returns_error_without_running_command(tmp_path):
     assert result.exit_code is None
     assert result.error is not None
     assert "root pom.xml" in result.error
+
+
+def test_verification_module_cannot_escape_workspace(tmp_path):
+    workspace = _workspace(tmp_path)
+    outside = tmp_path.parent / "outside-module"
+    outside.mkdir(exist_ok=True)
+    (outside / "pom.xml").write_text("<project />", encoding="utf-8")
+    plan = create_maven_module_plan("api-gateway", "../outside-module")
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("runner should not execute for escaping module path")
+
+    result = execute_verification_plan(plan, workspace, runner=should_not_run)
+
+    assert result.status == VerificationStatus.ERROR
+    assert result.error is not None
+    assert "must remain inside" in result.error
