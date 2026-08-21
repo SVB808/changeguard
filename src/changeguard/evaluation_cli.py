@@ -11,7 +11,7 @@ DEFAULT_CORPUS = (
     Path(__file__).resolve().parents[2]
     / "benchmarks"
     / "evaluation"
-    / "rest-impact-v2.json"
+    / "rest-impact-v3.json"
 )
 
 
@@ -54,7 +54,7 @@ def evaluate_cmd(
 
 def _print_report(report: EvaluationReport, details: bool) -> None:
     typer.echo(
-        f"ChangeGuard V4.1 | corpus: {report.corpus_version} | "
+        f"ChangeGuard V4.2 | corpus: {report.corpus_version} | "
         f"{report.total_cases} case(s)"
     )
     typer.echo(
@@ -96,6 +96,44 @@ def _print_report(report: EvaluationReport, details: bool) -> None:
         "end-to-end latency claim."
     )
 
+    if report.technology_breakdown:
+        typer.echo("")
+        typer.echo("consumer technology breakdown (explicitly labeled cases only):")
+        for technology in report.technology_breakdown:
+            typer.echo(
+                f"  {technology.technology.value}: {technology.total_cases} case(s) | "
+                f"exact={technology.exact_matches}/{technology.total_cases} "
+                f"({_percent(technology.exact_accuracy)})"
+            )
+            typer.echo(
+                "    impact: "
+                f"TP={technology.impact_detection.true_positive} "
+                f"FP={technology.impact_detection.false_positive} "
+                f"TN={technology.impact_detection.true_negative} "
+                f"FN={technology.impact_detection.false_negative} | "
+                f"precision={technology.impact_detection.precision:.3f} "
+                f"recall={technology.impact_detection.recall:.3f} "
+                f"FPR={technology.impact_detection.false_positive_rate:.3f}"
+            )
+            typer.echo(
+                "    endpoint: "
+                f"TP={technology.endpoint_evidence.true_positive} "
+                f"FP={technology.endpoint_evidence.false_positive} "
+                f"TN={technology.endpoint_evidence.true_negative} "
+                f"FN={technology.endpoint_evidence.false_negative} | "
+                f"precision={technology.endpoint_evidence.precision:.3f} "
+                f"recall={technology.endpoint_evidence.recall:.3f} "
+                f"FPR={technology.endpoint_evidence.false_positive_rate:.3f}"
+            )
+            typer.echo(
+                "    verification-plan accuracy: "
+                f"{_percent(technology.verification_plan_accuracy)}"
+            )
+        typer.echo(
+            "technology scope: small controlled samples; unlabeled generic/synthetic "
+            "cases are excluded from this breakdown."
+        )
+
     if not details:
         return
 
@@ -103,13 +141,19 @@ def _print_report(report: EvaluationReport, details: bool) -> None:
     typer.echo("cases:")
     for case in report.cases:
         status = "PASS" if case.exact_match else "FAIL"
+        technology = (
+            f" | technology={case.consumer_technology.value}"
+            if case.consumer_technology is not None
+            else ""
+        )
         typer.echo(
             f"  {status} {case.id} | impact expected={case.expected_impact} "
             f"actual={case.predicted_impact} | disposition "
             f"expected={case.expected_disposition.value} "
             f"actual={case.actual_disposition.value} | verification-plan "
             f"expected={case.expected_verification_plan} "
-            f"actual={case.actual_verification_plan} | {case.analysis_ms:.3f} ms"
+            f"actual={case.actual_verification_plan}{technology} | "
+            f"{case.analysis_ms:.3f} ms"
         )
         if case.reference:
             typer.echo(f"    reference: {case.reference}")

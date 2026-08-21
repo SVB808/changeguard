@@ -1,0 +1,90 @@
+{
+  "version": "rest-impact-v3",
+  "description": "Technology-aware extension of the controlled REST compatibility corpus. It inherits all 22 rest-impact-v2 cases, labels the real WebClient-backed observations, and adds seeded OpenFeign and RestTemplate path-break cases from ChangeGuard PR #16. Aggregate and per-technology metrics are controlled-corpus metrics, not production accuracy claims.",
+  "extends": "rest-impact-v2.json",
+  "case_metadata": {
+    "pr253_post_signature_unrelated_get": {
+      "consumer_technology": "webclient"
+    },
+    "pr253_put_signature_unrelated_get": {
+      "consumer_technology": "webclient"
+    },
+    "seeded_path_break_exact_call": {
+      "consumer_technology": "webclient"
+    }
+  },
+  "cases": [
+    {
+      "id": "seeded_feign_path_break_exact_call",
+      "description": "The seeded provider path break must be detected through literal OpenFeign declaration evidence and produce targeted verification work.",
+      "source": "seeded-pr",
+      "reference": "SVB808/changeguard#16",
+      "provider_service": "provider-service",
+      "consumer_service": "feign-consumer-service",
+      "consumer_technology": "feign",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_PATH_CHANGED",
+        "before": {
+          "method": "GET",
+          "path": "/orders/{orderId}",
+          "parameter_types": ["int"],
+          "return_type": "String"
+        },
+        "after": {
+          "method": "GET",
+          "path": "/purchases/{orderId}",
+          "parameter_types": ["int"],
+          "return_type": "String"
+        }
+      },
+      "consumer_calls": [
+        {
+          "method": "GET",
+          "path": "/orders/{id}"
+        }
+      ],
+      "expected": {
+        "impact": true,
+        "disposition": "endpoint",
+        "verification_plan": true
+      }
+    },
+    {
+      "id": "seeded_resttemplate_path_break_exact_call",
+      "description": "The seeded provider path break must be detected through literal RestTemplate call evidence and produce targeted verification work.",
+      "source": "seeded-pr",
+      "reference": "SVB808/changeguard#16",
+      "provider_service": "provider-service",
+      "consumer_service": "resttemplate-consumer-service",
+      "consumer_technology": "resttemplate",
+      "dependency": true,
+      "change": {
+        "kind": "ENDPOINT_PATH_CHANGED",
+        "before": {
+          "method": "GET",
+          "path": "/orders/{orderId}",
+          "parameter_types": ["int"],
+          "return_type": "String"
+        },
+        "after": {
+          "method": "GET",
+          "path": "/purchases/{orderId}",
+          "parameter_types": ["int"],
+          "return_type": "String"
+        }
+      },
+      "consumer_calls": [
+        {
+          "method": "GET",
+          "path": "/orders/{id}"
+        }
+      ],
+      "expected": {
+        "impact": true,
+        "disposition": "endpoint",
+        "verification_plan": true
+      }
+    }
+  ]
+}
