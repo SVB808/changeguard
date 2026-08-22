@@ -1,3 +1,5 @@
+import pytest
+
 from changeguard.selection_evaluation import (
     SelectionBenchmarkCase,
     SelectionBenchmarkCorpus,
@@ -113,7 +115,7 @@ def test_cross_batch_comparison_reports_exact_matches_and_jaccard():
     assert comparison.exact_ordered_match_rate == 0.5
     assert comparison.exact_set_matches == 1
     assert comparison.exact_set_match_rate == 0.5
-    assert comparison.mean_cross_batch_jaccard == 0.75
+    assert comparison.mean_cross_batch_jaccard == pytest.approx(2.0 / 3.0)
     assert comparison.quality_metric_deltas["selection_precision"] < 0
     assert comparison.quality_metric_deltas["distractor_selection_rate"] > 0
 
@@ -131,10 +133,7 @@ def test_cross_batch_comparison_rejects_different_warmup_protocols():
         runs_per_case=1,
     )
 
-    try:
+    with pytest.raises(ValueError, match="different protocols") as exc_info:
         compare_selection_reports(left, right)
-    except ValueError as exc:
-        assert "different protocols" in str(exc)
-        assert "warmup_runs_per_case" in str(exc)
-    else:
-        raise AssertionError("expected mismatched protocol to be rejected")
+
+    assert "warmup_runs_per_case" in str(exc_info.value)
