@@ -136,6 +136,10 @@ class SelectionEvaluationReport(BaseModel):
     total_cases: int
     runs_per_case: int
     total_runs: int
+    warmup_runs_per_case: int = 0
+    total_warmup_runs: int = 0
+    successful_warmups: int = 0
+    warmup_guardrail_passes: int = 0
     successful_selections: int
     selection_success_rate: float
     guardrail_passes: int
@@ -150,7 +154,24 @@ class SelectionEvaluationReport(BaseModel):
     p95_latency_ms: float
     input_tokens_total: int | None = None
     output_tokens_total: int | None = None
+    warmups: list[SelectionRunEvaluation] = Field(default_factory=list)
     runs: list[SelectionRunEvaluation] = Field(default_factory=list)
+
+
+class SelectionEvaluationComparison(BaseModel):
+    corpus_version: str
+    selector: str
+    model: str | None = None
+    runs_per_case: int
+    warmup_runs_per_case: int
+    aligned_runs: int
+    comparable_grounded_runs: int
+    exact_ordered_matches: int
+    exact_ordered_match_rate: float | None
+    exact_set_matches: int
+    exact_set_match_rate: float | None
+    mean_cross_batch_jaccard: float | None
+    quality_metric_deltas: dict[str, float | None]
 
 
 def load_selection_corpus(path: Path | str) -> SelectionBenchmarkCorpus:
@@ -158,20 +179,36 @@ def load_selection_corpus(path: Path | str) -> SelectionBenchmarkCorpus:
     return SelectionBenchmarkCorpus.model_validate(payload)
 
 
+def load_selection_report(path: Path | str) -> SelectionEvaluationReport:
+    text = Path(path).expanduser().resolve().read_text(encoding="utf-8-sig")
+    return SelectionEvaluationReport.model_validate_json(text)
+
+
 def evaluate_selector(
     corpus: SelectionBenchmarkCorpus,
     selector: EvidenceSelector,
     *,
     runs_per_case: int = 1,
+    warmup_runs_per_case: int = 0,
 ) -> SelectionEvaluationReport:
     if runs_per_case < 1:
         raise ValueError("runs_per_case must be at least 1")
+    if warmup_runs_per_case < 0:
+        raise ValueError("warmup_runs_per_case cannot be negative")
 
+    warmups: list[SelectionRunEvaluation] = []
     runs: list[SelectionRunEvaluation] = []
     selector_name: str | None = None
     model: str | None = None
 
     for case in corpus.cases:
+        for warmup_index in range(1, warmup_runs_per_case + 1):
+            result, selection = _evaluate_run(case, selector, warmup_index)
+            warmups.append(result)
+            if selection is not None:
+                selector_name = selector_name or selection.selector
+                model = model or selection.model
+
         for run_index in range(1, runs_per_case + 1):
             result, selection = _evaluate_run(case, selector, run_index)
             runs.append(result)
@@ -179,6 +216,8 @@ def evaluate_selector(
                 selector_name = selector_name or selection.selector
                 model = model or selection.model
 
+    successful_warmups = [run for run in warmups if run.selector_success]
+    valid_warmups = [run for run in warmups if run.guardrail_passed]
     successful = [run for run in runs if run.selector_success]
     valid = [run for run in runs if run.guardrail_passed]
     guardrail_passes = len(valid)
@@ -193,6 +232,7 @@ def evaluate_selector(
     verification_hits = sum(run.verification_hits for run in valid)
     verification_total = sum(run.verification_total for run in valid)
 
+    # Warmups are deliberately excluded from quality, latency, and token metrics.
     latencies = [run.latency_ms for run in runs]
     input_tokens = [run.input_tokens for run in successful if run.input_tokens is not None]
     output_tokens = [run.output_tokens for run in successful if run.output_tokens is not None]
@@ -204,6 +244,10 @@ def evaluate_selector(
         total_cases=len(corpus.cases),
         runs_per_case=runs_per_case,
         total_runs=len(runs),
+        warmup_runs_per_case=warmup_runs_per_case,
+        total_warmup_runs=len(warmups),
+        successful_warmups=len(successful_warmups),
+        warmup_guardrail_passes=len(valid_warmups),
         successful_selections=len(successful),
         selection_success_rate=_ratio(len(successful), len(runs)),
         guardrail_passes=guardrail_passes,
@@ -221,7 +265,95 @@ def evaluate_selector(
         p95_latency_ms=_percentile(latencies, 0.95),
         input_tokens_total=sum(input_tokens) if input_tokens else None,
         output_tokens_total=sum(output_tokens) if output_tokens else None,
+        warmups=warmups,
         runs=runs,
+    )
+
+
+def compare_selection_reports(
+    left: SelectionEvaluationReport,
+    right: SelectionEvaluationReport,
+) -> SelectionEvaluationComparison:
+    protocol_fields = (
+        ("corpus_version", left.corpus_version, right.corpus_version),
+        ("selector", left.selector, right.selector),
+        ("model", left.model, right.model),
+        ("total_cases", left.total_cases, right.total_cases),
+        ("runs_per_case", left.runs_per_case, right.runs_per_case),
+        (
+            "warmup_runs_per_case",
+            left.warmup_runs_per_case,
+            right.warmup_runs_per_case,
+        ),
+    )
+    mismatches = [
+        f"{name}: {left_value!r} != {right_value!r}"
+        for name, left_value, right_value in protocol_fields
+        if left_value != right_value
+    ]
+    if mismatches:
+        raise ValueError(
+            "Selection evaluation reports use different protocols: "
+            + "; ".join(mismatches)
+        )
+
+    left_runs = {(run.case_id, run.run_index): run for run in left.runs}
+    right_runs = {(run.case_id, run.run_index): run for run in right.runs}
+    if set(left_runs) != set(right_runs):
+        raise ValueError("Selection evaluation reports have different measured run keys")
+
+    aligned_keys = sorted(left_runs)
+    grounded_pairs = [
+        (left_runs[key], right_runs[key])
+        for key in aligned_keys
+        if left_runs[key].guardrail_passed and right_runs[key].guardrail_passed
+    ]
+
+    exact_ordered = sum(
+        left_run.selected_evidence_ids == right_run.selected_evidence_ids
+        for left_run, right_run in grounded_pairs
+    )
+    exact_sets = sum(
+        set(left_run.selected_evidence_ids) == set(right_run.selected_evidence_ids)
+        for left_run, right_run in grounded_pairs
+    )
+    jaccards = [
+        _jaccard(
+            set(left_run.selected_evidence_ids),
+            set(right_run.selected_evidence_ids),
+        )
+        for left_run, right_run in grounded_pairs
+    ]
+
+    metric_names = (
+        "required_evidence_recall",
+        "selection_precision",
+        "distractor_selection_rate",
+        "distinct_consumer_coverage",
+        "verification_evidence_retention",
+        "mean_pairwise_jaccard",
+    )
+    deltas = {
+        name: _optional_delta(getattr(left, name), getattr(right, name))
+        for name in metric_names
+    }
+
+    return SelectionEvaluationComparison(
+        corpus_version=left.corpus_version,
+        selector=left.selector,
+        model=left.model,
+        runs_per_case=left.runs_per_case,
+        warmup_runs_per_case=left.warmup_runs_per_case,
+        aligned_runs=len(aligned_keys),
+        comparable_grounded_runs=len(grounded_pairs),
+        exact_ordered_matches=exact_ordered,
+        exact_ordered_match_rate=_optional_ratio(exact_ordered, len(grounded_pairs)),
+        exact_set_matches=exact_sets,
+        exact_set_match_rate=_optional_ratio(exact_sets, len(grounded_pairs)),
+        mean_cross_batch_jaccard=(
+            sum(jaccards) / len(jaccards) if jaccards else None
+        ),
+        quality_metric_deltas=deltas,
     )
 
 
@@ -324,11 +456,21 @@ def _mean_pairwise_jaccard(
     scores: list[float] = []
     for selections in by_case.values():
         for left, right in combinations(selections, 2):
-            union = left | right
-            scores.append(1.0 if not union else len(left & right) / len(union))
+            scores.append(_jaccard(left, right))
     if not scores:
         return None
     return sum(scores) / len(scores)
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    union = left | right
+    return 1.0 if not union else len(left & right) / len(union)
+
+
+def _optional_delta(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return right - left
 
 
 def _ratio(numerator: int, denominator: int) -> float:
