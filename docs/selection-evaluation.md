@@ -1,4 +1,4 @@
-# V5.2 evidence-selection evaluation
+# V5.2.1 evidence-selection evaluation
 
 ChangeGuard evaluates the model-backed evidence selector separately from deterministic change-impact analysis.
 
@@ -46,11 +46,11 @@ The prompt-injection case is intentionally repository-derived *data*. It does no
 - distractor-selection rate,
 - distinct-consumer coverage,
 - verification-evidence retention,
-- mean pairwise Jaccard similarity across repeated runs,
+- mean pairwise Jaccard similarity across repeated measured runs,
 - p50/p95 selector latency,
 - provider input/output token totals when the provider reports them.
 
-Undefined ratios are reported as `N/A` rather than silently treated as zero. Stability is `N/A` unless `--runs` is at least 2.
+Undefined ratios are reported as `N/A` rather than silently treated as zero. Within-batch stability is `N/A` unless `--runs` is at least 2.
 
 ## Deterministic baseline
 
@@ -62,7 +62,7 @@ changeguard evaluate-selector --selector deterministic --runs 3 --details
 
 It is expected to be perfectly stable and grounded, but it is not designed to be maximally selective. In particular, it may retain distractors and can lose lower-priority evidence when more than 12 items compete for the selection budget.
 
-That is intentional: V5.2 evaluates whether a model-backed selector improves evidence prioritization without weakening grounding.
+That is intentional: the model-backed evaluation asks whether a selector improves evidence prioritization without weakening grounding.
 
 ## Local Ollama evaluation
 
@@ -76,16 +76,62 @@ changeguard evaluate-selector `
   --details
 ```
 
-`--runs 3` is a useful first stability check. Model evaluation is explicit because it can be slower and, for cloud providers, may incur cost.
+This is the cold/normal-call protocol: no unscored warmup is performed. It intentionally preserves first-call behavior.
 
 Machine-readable output:
 
 ```powershell
 changeguard evaluate-selector `
   --selector ollama `
+  --model llama3.2:3b `
   --runs 3 `
-  --json
+  --json |
+  Out-File -Encoding utf8 ollama-cold-batch.json
 ```
+
+## Steady-state evaluation with warmups
+
+V5.2.1 can explicitly separate later steady-state behavior from first-call effects:
+
+```powershell
+changeguard evaluate-selector `
+  --selector ollama `
+  --model llama3.2:3b `
+  --warmup-runs 1 `
+  --runs 3 `
+  --details
+```
+
+Warmups are performed once per benchmark case before measured runs. They still pass through deterministic grounding validation, but they are **unscored** and excluded from:
+
+- required/optional/distractor quality metrics,
+- measured latency percentiles,
+- measured provider token totals.
+
+A steady-state report is therefore a different protocol from a cold/normal-call report. Do not compare them as if only the model changed.
+
+## Cross-batch reproducibility
+
+Within-command Jaccard does not prove that an independent second invocation reproduces the same selections. Save two reports produced with the same protocol and compare them directly:
+
+```powershell
+changeguard compare-selector-evals `
+  ollama-steady-batch-a.json `
+  ollama-steady-batch-b.json
+```
+
+The comparator requires matching corpus, selector, model, case count, measured runs/case, and warmups/case. It reports:
+
+- aligned measured runs,
+- comparable grounded run pairs,
+- exact ordered evidence-ID list match rate,
+- exact evidence-set match rate,
+- mean cross-batch Jaccard similarity,
+- right-minus-left deltas for the main quality metrics.
+
+The ordered-list metric is deliberately stricter than set equality. Jaccard shows how much the selected evidence overlaps even when exact reproduction fails.
+
+PowerShell BOM-prefixed UTF-8 evaluation JSON is accepted by the comparator.
 
 ## OpenAI evaluation
 
@@ -107,16 +153,22 @@ changeguard evaluate-selector --selector ollama --strict
 
 `--strict` is deliberately a **safety/availability gate**, not a model-quality gate. It fails when:
 
-- a selector invocation fails, or
-- a returned selection fails deterministic grounding validation.
+- a warmup or measured selector invocation fails, or
+- a returned warmup or measured selection fails deterministic grounding validation.
 
 It does not currently fail on a chosen quality threshold such as 95% required recall. Quality thresholds should be introduced only after enough controlled and live measurements exist to justify them.
+
+## Reproducibility discipline
+
+The Ollama selector uses `temperature: 0` and an explicit default seed as sampling controls. Local validation showed that these settings do **not** guarantee identical structured-output selections across independent invocations in the tested runtime. ChangeGuard therefore measures reproducibility empirically instead of inferring it from configuration.
+
+See ADR 0015 for the seed control and ADR 0016 for the cold-vs-steady-state and cross-batch protocol.
 
 ## Claim discipline
 
 Correct wording:
 
-> Evidence-selection quality was measured on the controlled `synthesis-selection-v1` corpus, separately from deterministic impact-detection metrics.
+> Evidence-selection quality and reproducibility were measured on the controlled `synthesis-selection-v1` corpus, separately from deterministic impact-detection metrics.
 
 Do not say:
 
