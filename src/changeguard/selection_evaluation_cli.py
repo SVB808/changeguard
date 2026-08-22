@@ -14,9 +14,12 @@ from changeguard.model_selector import (
     OpenAIEvidenceSelector,
 )
 from changeguard.selection_evaluation import (
+    SelectionEvaluationComparison,
     SelectionEvaluationReport,
+    compare_selection_reports,
     evaluate_selector,
     load_selection_corpus,
+    load_selection_report,
 )
 from changeguard.synthesis import DeterministicEvidenceSelector
 
@@ -61,20 +64,30 @@ def evaluate_selector_cmd(
         "--runs",
         min=1,
         max=20,
-        help="Number of selector runs per case. Use more than one to measure stability.",
+        help="Number of measured selector runs per case.",
+    ),
+    warmup_runs: int = typer.Option(
+        0,
+        "--warmup-runs",
+        min=0,
+        max=20,
+        help=(
+            "Unscored selector runs per case before measurement. Use this to measure "
+            "steady-state behavior separately from cold/first-call behavior."
+        ),
     ),
     details: bool = typer.Option(
         False,
         "--details/--no-details",
-        help="Print per-case, per-run selections and labeled outcomes.",
+        help="Print per-case, per-run measured selections and labeled outcomes.",
     ),
     strict: bool = typer.Option(
         False,
         "--strict/--no-strict",
         help=(
-            "Exit with code 1 if any selector call fails or any returned selection "
-            "fails deterministic grounding guardrails. Quality metrics are reported "
-            "but are not hard-gated by this flag."
+            "Exit with code 1 if any warmup/measured selector call fails or any returned "
+            "selection fails deterministic grounding guardrails. Quality metrics are "
+            "reported but are not hard-gated by this flag."
         ),
     ),
     json_output: bool = typer.Option(
@@ -87,7 +100,12 @@ def evaluate_selector_cmd(
     try:
         corpus_model = load_selection_corpus(corpus)
         selector = _create_selector(selector_name, model=model, ollama_url=ollama_url)
-        report = evaluate_selector(corpus_model, selector, runs_per_case=runs)
+        report = evaluate_selector(
+            corpus_model,
+            selector,
+            runs_per_case=runs,
+            warmup_runs_per_case=warmup_runs,
+        )
     except (OSError, ValueError, ValidationError, ModelSelectionError) as exc:
         typer.echo(f"Selector evaluation input error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
@@ -97,11 +115,56 @@ def evaluate_selector_cmd(
     else:
         _print_report(report, details=details)
 
-    if strict and (
+    warmup_failed = (
+        report.total_warmup_runs > 0
+        and (
+            report.successful_warmups != report.total_warmup_runs
+            or report.warmup_guardrail_passes != report.successful_warmups
+        )
+    )
+    measured_failed = (
         report.successful_selections != report.total_runs
         or report.guardrail_passes != report.successful_selections
-    ):
+    )
+    if strict and (warmup_failed or measured_failed):
         raise typer.Exit(code=1)
+
+
+def compare_selector_evals_cmd(
+    left: Path = typer.Argument(
+        ...,
+        help="First machine-readable evaluate-selector JSON report.",
+        exists=True,
+        dir_okay=False,
+        file_okay=True,
+    ),
+    right: Path = typer.Argument(
+        ...,
+        help="Second machine-readable evaluate-selector JSON report.",
+        exists=True,
+        dir_okay=False,
+        file_okay=True,
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable comparison JSON.",
+    ),
+) -> None:
+    """Compare independent selector-evaluation batches for reproducibility."""
+    try:
+        left_report = load_selection_report(left)
+        right_report = load_selection_report(right)
+        comparison = compare_selection_reports(left_report, right_report)
+    except (OSError, ValueError, ValidationError) as exc:
+        typer.echo(f"Selector comparison input error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        typer.echo(comparison.model_dump_json(indent=2))
+        return
+
+    _print_comparison(comparison, left=left, right=right)
 
 
 def _create_selector(selector_name: str, *, model: str | None, ollama_url: str):
@@ -123,13 +186,27 @@ def _create_selector(selector_name: str, *, model: str | None, ollama_url: str):
 def _print_report(report: SelectionEvaluationReport, *, details: bool) -> None:
     model = f" | model={report.model}" if report.model else ""
     typer.echo(
-        f"ChangeGuard V5.2 | corpus: {report.corpus_version} | "
+        f"ChangeGuard V5.2.1 | corpus: {report.corpus_version} | "
         f"selector={report.selector}{model}"
     )
+    mode = "cold/normal-call"
+    if report.warmup_runs_per_case:
+        mode = (
+            f"steady-state after {report.warmup_runs_per_case} unscored "
+            "warmup run(s) per case"
+        )
+    typer.echo(f"measurement mode: {mode}")
     typer.echo(
-        f"cases: {report.total_cases} | runs/case: {report.runs_per_case} | "
-        f"total runs: {report.total_runs}"
+        f"cases: {report.total_cases} | measured runs/case: {report.runs_per_case} | "
+        f"measured total: {report.total_runs}"
     )
+    if report.total_warmup_runs:
+        typer.echo(
+            "warmups: "
+            f"selector success={report.successful_warmups}/{report.total_warmup_runs} | "
+            "grounding="
+            f"{report.warmup_guardrail_passes}/{report.successful_warmups}"
+        )
     typer.echo(
         "selector success: "
         f"{report.successful_selections}/{report.total_runs} "
@@ -161,16 +238,16 @@ def _print_report(report: SelectionEvaluationReport, *, details: bool) -> None:
         f"{_percent_or_na(report.verification_evidence_retention)}"
     )
     typer.echo(
-        "run-to-run stability (mean pairwise Jaccard): "
+        "within-batch stability (mean pairwise Jaccard): "
         f"{_decimal_or_na(report.mean_pairwise_jaccard)}"
     )
     typer.echo(
-        "selector latency: "
+        "measured selector latency: "
         f"p50={report.p50_latency_ms:.3f} ms | p95={report.p95_latency_ms:.3f} ms"
     )
     if report.input_tokens_total is not None or report.output_tokens_total is not None:
         typer.echo(
-            "provider tokens: "
+            "measured provider tokens: "
             f"input={report.input_tokens_total or 0} | "
             f"output={report.output_tokens_total or 0}"
         )
@@ -183,7 +260,7 @@ def _print_report(report: SelectionEvaluationReport, *, details: bool) -> None:
         return
 
     typer.echo("")
-    typer.echo("runs:")
+    typer.echo("measured runs:")
     for run in report.runs:
         if not run.selector_success:
             typer.echo(
@@ -210,6 +287,46 @@ def _print_report(report: SelectionEvaluationReport, *, details: bool) -> None:
         typer.echo("    selected: " + ", ".join(run.selected_evidence_ids))
 
 
+def _print_comparison(
+    comparison: SelectionEvaluationComparison,
+    *,
+    left: Path,
+    right: Path,
+) -> None:
+    model = f" | model={comparison.model}" if comparison.model else ""
+    typer.echo(
+        f"ChangeGuard V5.2.1 selector reproducibility | "
+        f"corpus={comparison.corpus_version} | selector={comparison.selector}{model}"
+    )
+    typer.echo(f"left:  {left}")
+    typer.echo(f"right: {right}")
+    typer.echo(
+        f"protocol: warmups/case={comparison.warmup_runs_per_case} | "
+        f"measured runs/case={comparison.runs_per_case}"
+    )
+    typer.echo(
+        f"aligned measured runs: {comparison.aligned_runs} | "
+        f"comparable grounded pairs: {comparison.comparable_grounded_runs}"
+    )
+    typer.echo(
+        "exact ordered selection match: "
+        f"{comparison.exact_ordered_matches}/{comparison.comparable_grounded_runs} "
+        f"({_percent_or_na(comparison.exact_ordered_match_rate)})"
+    )
+    typer.echo(
+        "exact evidence-set match: "
+        f"{comparison.exact_set_matches}/{comparison.comparable_grounded_runs} "
+        f"({_percent_or_na(comparison.exact_set_match_rate)})"
+    )
+    typer.echo(
+        "mean cross-batch Jaccard: "
+        f"{_decimal_or_na(comparison.mean_cross_batch_jaccard)}"
+    )
+    typer.echo("quality metric deltas (right - left):")
+    for name, value in comparison.quality_metric_deltas.items():
+        typer.echo(f"  {name}: {_signed_percent_or_na(value)}")
+
+
 def _percent(value: float) -> str:
     return f"{value * 100.0:.1f}%"
 
@@ -218,5 +335,9 @@ def _percent_or_na(value: float | None) -> str:
     return "N/A" if value is None else _percent(value)
 
 
+def _signed_percent_or_na(value: float | None) -> str:
+    return "N/A" if value is None else f"{value * 100.0:+.1f} pp"
+
+
 def _decimal_or_na(value: float | None) -> str:
-    return "N/A (use --runs >= 2)" if value is None else f"{value:.3f}"
+    return "N/A (insufficient comparable runs)" if value is None else f"{value:.3f}"
