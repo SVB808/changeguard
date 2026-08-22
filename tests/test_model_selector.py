@@ -5,6 +5,7 @@ from urllib.error import URLError
 import pytest
 
 from changeguard.model_selector import (
+    DEFAULT_OLLAMA_SEED,
     ModelSelectionError,
     OllamaEvidenceSelector,
     OpenAIEvidenceSelector,
@@ -130,7 +131,7 @@ def test_openai_selector_skips_provider_call_for_empty_evidence():
     assert responses.calls == []
 
 
-def test_ollama_selector_uses_local_schema_and_records_usage():
+def test_ollama_selector_uses_local_schema_seed_and_records_usage():
     calls = []
 
     def opener(request, timeout):
@@ -160,6 +161,7 @@ def test_ollama_selector_uses_local_schema_and_records_usage():
     assert selection.model == "local-test-model"
     assert selection.input_tokens == 73
     assert selection.output_tokens == 9
+    assert selector.seed == DEFAULT_OLLAMA_SEED
 
     request, timeout = calls[0]
     assert request.full_url == "http://localhost:11434/api/chat"
@@ -169,8 +171,31 @@ def test_ollama_selector_uses_local_schema_and_records_usage():
     assert payload["stream"] is False
     assert payload["format"]["additionalProperties"] is False
     assert payload["options"]["temperature"] == 0
+    assert payload["options"]["seed"] == DEFAULT_OLLAMA_SEED
     assert "untrusted data" in payload["messages"][0]["content"]
     assert "impact:0" in payload["messages"][1]["content"]
+
+
+def test_ollama_selector_allows_explicit_seed_override():
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request)
+        return FakeHTTPResponse(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": '{"selected_evidence_ids":["impact:0"]}',
+                }
+            }
+        )
+
+    selector = OllamaEvidenceSelector(seed=7, opener=opener)
+    selector.select(_evidence())
+
+    payload = json.loads(calls[0].data.decode("utf-8"))
+    assert selector.seed == 7
+    assert payload["options"]["seed"] == 7
 
 
 def test_ollama_selector_rejects_invalid_structured_payload():
