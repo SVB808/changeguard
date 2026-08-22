@@ -17,6 +17,7 @@ from changeguard.synthesis import (
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_SEED = 42
 
 
 class ModelSelectionError(RuntimeError):
@@ -91,7 +92,8 @@ class OllamaEvidenceSelector:
 
     Ollama receives the same untrusted evidence records as the OpenAI selector and
     returns only the small JSON selection object. ChangeGuard still validates every
-    selected ID before deterministic rendering.
+    selected ID before deterministic rendering. Temperature and an explicit seed are
+    pinned by default so repeated evaluation runs have a reproducible sampling setup.
     """
 
     def __init__(
@@ -99,11 +101,13 @@ class OllamaEvidenceSelector:
         model: str = DEFAULT_OLLAMA_MODEL,
         base_url: str = DEFAULT_OLLAMA_URL,
         timeout_seconds: float = 120.0,
+        seed: int = DEFAULT_OLLAMA_SEED,
         opener: Callable[..., Any] | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.seed = seed
         self._opener = opener or urlopen
 
     def select(self, evidence: list[EvidenceItem]) -> SynthesisSelection:
@@ -130,7 +134,10 @@ class OllamaEvidenceSelector:
             ],
             "stream": False,
             "format": schema,
-            "options": {"temperature": 0},
+            "options": {
+                "temperature": 0,
+                "seed": self.seed,
+            },
         }
         request = Request(
             f"{self.base_url}/api/chat",
