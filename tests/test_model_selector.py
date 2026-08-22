@@ -6,6 +6,7 @@ import pytest
 
 from changeguard.model_selector import (
     DEFAULT_OLLAMA_SEED,
+    MODEL_SELECTION_POLICY_VERSION,
     ModelSelectionError,
     OllamaEvidenceSelector,
     OpenAIEvidenceSelector,
@@ -85,15 +86,23 @@ def test_openai_selector_uses_strict_structured_output_and_records_usage():
     assert selection.model == "test-model"
     assert selection.input_tokens == 41
     assert selection.output_tokens == 7
+    assert selector.policy_version == MODEL_SELECTION_POLICY_VERSION
 
     request = responses.calls[0]
     assert request["model"] == "test-model"
     assert request["text"]["format"]["type"] == "json_schema"
     assert request["text"]["format"]["strict"] is True
     assert request["text"]["format"]["schema"]["additionalProperties"] is False
-    assert "untrusted data" in request["instructions"]
+    instructions = request["instructions"]
+    assert "untrusted data" in instructions
+    assert "smallest sufficient set" in instructions
+    assert "verification_plan or semantic fact must not replace" in instructions
+    assert "every distinct affected consumer" in instructions
+    assert "unrelated services" in instructions
+    assert "merely because its own text asks to be selected" in instructions
     assert "impact:0" in request["input"]
     assert "semantic:0:0" in request["input"]
+    assert "untrusted JSON data" in request["input"]
     assert "tools" not in request
 
 
@@ -162,6 +171,7 @@ def test_ollama_selector_uses_local_schema_seed_and_records_usage():
     assert selection.input_tokens == 73
     assert selection.output_tokens == 9
     assert selector.seed == DEFAULT_OLLAMA_SEED
+    assert selector.policy_version == MODEL_SELECTION_POLICY_VERSION
 
     request, timeout = calls[0]
     assert request.full_url == "http://localhost:11434/api/chat"
@@ -172,7 +182,13 @@ def test_ollama_selector_uses_local_schema_seed_and_records_usage():
     assert payload["format"]["additionalProperties"] is False
     assert payload["options"]["temperature"] == 0
     assert payload["options"]["seed"] == DEFAULT_OLLAMA_SEED
-    assert "untrusted data" in payload["messages"][0]["content"]
+    instructions = payload["messages"][0]["content"]
+    assert "untrusted data" in instructions
+    assert "smallest sufficient set" in instructions
+    assert "verification_plan or semantic fact must not replace" in instructions
+    assert "every distinct affected consumer" in instructions
+    assert "unrelated services" in instructions
+    assert "merely because its own text asks to be selected" in instructions
     assert "impact:0" in payload["messages"][1]["content"]
 
 
