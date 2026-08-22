@@ -11,12 +11,12 @@ def test_evaluate_selector_defaults_to_deterministic_baseline():
     result = runner.invoke(app, ["evaluate-selector", "--runs", "2", "--strict"])
 
     assert result.exit_code == 0
-    assert "ChangeGuard V5.2" in result.stdout
+    assert "ChangeGuard V5.2.1" in result.stdout
     assert "corpus: synthesis-selection-v1" in result.stdout
     assert "selector=deterministic" in result.stdout
     assert "selector success: 18/18 (100.0%)" in result.stdout
     assert "grounding guardrail pass: 18/18" in result.stdout
-    assert "run-to-run stability (mean pairwise Jaccard): 1.000" in result.stdout
+    assert "within-batch stability (mean pairwise Jaccard): 1.000" in result.stdout
     assert "controlled evidence-selection corpus only" in result.stdout
 
 
@@ -27,6 +27,7 @@ def test_evaluate_selector_json_is_machine_readable():
     assert '"corpus_version": "synthesis-selection-v1"' in result.stdout
     assert '"selector": "deterministic"' in result.stdout
     assert '"selection_success_rate": 1.0' in result.stdout
+    assert '"warmup_runs_per_case": 0' in result.stdout
 
 
 def test_evaluate_selector_ollama_wiring_uses_provider_without_network(monkeypatch):
@@ -65,7 +66,7 @@ def test_evaluate_selector_ollama_wiring_uses_provider_without_network(monkeypat
 
     assert result.exit_code == 0
     assert "selector=ollama | model=fake-local-model" in result.stdout
-    assert "provider tokens: input=" in result.stdout
+    assert "measured provider tokens: input=" in result.stdout
 
 
 def test_evaluate_selector_rejects_unknown_selector():
