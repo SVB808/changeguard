@@ -1,43 +1,43 @@
-# Release-candidate evaluation
+# ChangeGuard release evaluation
 
-`changeguard evaluate-release` is the consolidated V1 readiness command. It deliberately combines two different controlled evaluations without collapsing their meanings.
+ChangeGuard 1.0.0rc1 has one consolidated offline release-candidate gate:
+
+```powershell
+changeguard evaluate-release --selector deterministic --runs 3 --strict
+```
+
+The command deliberately combines two different types of evidence instead of collapsing them into one accuracy number.
 
 ## Deterministic impact gate
 
-The first section runs the versioned `rest-impact-v3` corpus through ChangeGuard's deterministic impact/refinement/planning core. The current CI gate requires exact disposition + verification-plan agreement for all 24 controlled cases.
+`rest-impact-v3` validates the deterministic change-impact vertical. It measures exact disposition + verification-plan decisions, impact/endpoint confusion matrices, and a small technology breakdown.
 
-This is not a production-accuracy claim. The corpus is small and intentionally controlled, and the latency excludes GitHub access, JVM parsing, Maven execution and model inference.
+A passing release gate requires every controlled case to match its expected disposition and verification-plan decision.
+
+These are controlled-corpus metrics, not production accuracy.
 
 ## Runtime-shaped synthesis gate
 
-The second section uses `synthesis-selection-runtime-v1`. These cases are built from typed `ChangeManifest` and `VerificationResult` fixtures and then passed through the same `collect_evidence()` function used by runtime synthesis.
+`synthesis-selection-runtime-v1` is built from typed `ChangeManifest` and `VerificationResult` objects and then passed through the same `collect_evidence()` function used by production synthesis. That gives impact evidence the same provider/consumer source-path provenance used by deterministic decision-critical closure.
 
-That distinction matters: active impact evidence contains the provider changed-file provenance that production ChangeGuard attaches, so deterministic semantic-to-impact linkage is evaluated against realistic evidence shape rather than hand-authored source paths.
+The release gate requires:
 
-The report separates:
+- every selector call to succeed,
+- raw and effective selections to pass grounding,
+- 100% effective retention of runtime policy-mandatory evidence,
+- zero corpus-policy semantic contradictions.
 
-- raw selector quality,
-- post-policy effective quality,
-- grounding success,
-- verification-evidence retention,
-- distinct-consumer coverage,
-- runtime policy-mandatory retention,
-- corpus-policy diagnostics.
+The release command also reports raw/effective summary quality so model weaknesses remain visible even when deterministic policy closure preserves runtime invariants.
 
-The runtime gate requires 100% effective retention of policy-mandatory evidence. It does **not** require an LLM to achieve perfect general summary precision or recall.
+## CI
 
-## Offline release gate
+CI runs the consolidated deterministic release gate on Python 3.12 in addition to the full unit suite, deterministic impact benchmark, deterministic selector grounding gate, Java analyzer build, and seeded Maven fixtures.
 
-```powershell
-changeguard evaluate-release `
-  --selector deterministic `
-  --runs 3 `
-  --strict
-```
+The release gate is offline by default and never requires Ollama or OpenAI.
 
-This path is suitable for CI because it has no network/model dependency.
+## Local Ollama measurement
 
-## Local model release evaluation
+A local model can be measured against the same production-shaped corpus without changing the release invariants:
 
 ```powershell
 changeguard evaluate-release `
@@ -47,25 +47,18 @@ changeguard evaluate-release `
   --runs 3
 ```
 
-This measures the local model on production-shaped evidence while still reporting deterministic effective-policy guarantees separately.
+Model quality can vary by provider/runtime. The deterministic release gate therefore does not depend on a live model call.
 
-OpenAI can be selected explicitly when an API key and active billing are available:
+## Final V1 checklist
+
+Before tagging the release candidate/final V1:
 
 ```powershell
-changeguard evaluate-release `
-  --selector openai `
-  --runs 3
+pytest
+mvn -f analyzers/java-spring/pom.xml test
+changeguard evaluate --strict
+changeguard evaluate-release --selector deterministic --runs 3 --strict
+changeguard --help
 ```
 
-Live provider evaluation is never required by CI.
-
-## Release gates
-
-The consolidated command reports four gates:
-
-1. deterministic impact corpus exactness,
-2. selector and effective grounding,
-3. 100% effective runtime policy-mandatory retention,
-4. absence of corpus-policy semantic contradictions in the runtime-shaped corpus.
-
-The overall gate passes only if all four pass.
+The final merge/tag is intentionally separate from implementation work and should happen only after explicit release approval.
