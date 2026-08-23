@@ -105,6 +105,7 @@ def scan_pull_request(
             impact_candidates,
             dependency_graph,
             module_layout=module_layout,
+            expected_head=pull_request.head_sha,
         )
 
     return ChangeManifest(
