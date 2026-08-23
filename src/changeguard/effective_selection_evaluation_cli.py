@@ -137,7 +137,7 @@ def _create_selector(selector_name: str, *, model: str | None, ollama_url: str):
 def _print_report(report: EffectiveSelectionEvaluationReport, *, details: bool) -> None:
     model = f" | model={report.model}" if report.model else ""
     typer.echo(
-        f"ChangeGuard V5.3 | corpus: {report.corpus_version} | "
+        f"ChangeGuard V5.3.1 | corpus: {report.corpus_version} | "
         f"selector={report.selector}{model}"
     )
     mode = "cold/normal-call"
@@ -170,12 +170,35 @@ def _print_report(report: EffectiveSelectionEvaluationReport, *, details: bool) 
     typer.echo("effective quality after deterministic decision-critical closure:")
     _print_quality(report.effective_quality)
     typer.echo("")
+    typer.echo("runtime policy-mandatory retention:")
+    typer.echo(
+        "  raw: "
+        f"{report.policy_mandatory.raw_hits}/{report.policy_mandatory.raw_total} "
+        f"({_percent_or_na(report.policy_mandatory.raw_retention)})"
+    )
+    typer.echo(
+        "  effective: "
+        f"{report.policy_mandatory.effective_hits}/"
+        f"{report.policy_mandatory.effective_total} "
+        f"({_percent_or_na(report.policy_mandatory.effective_retention)})"
+    )
+    typer.echo("")
     typer.echo(
         "policy interventions: "
         f"{report.policy_intervention_runs}/{report.total_runs} run(s) | "
         f"added={report.policy_added_evidence_total} | "
         f"dropped={report.policy_dropped_evidence_total}"
     )
+    typer.echo(
+        "corpus-policy diagnostics: "
+        f"{len(report.corpus_policy_diagnostics)} warning(s)"
+    )
+    for diagnostic in report.corpus_policy_diagnostics:
+        ids = ", ".join(diagnostic.evidence_ids)
+        typer.echo(
+            f"  WARNING {diagnostic.case_id} [{diagnostic.code}] {ids}: "
+            f"{diagnostic.message}"
+        )
     typer.echo(
         "measured provider latency: "
         f"p50={report.p50_provider_latency_ms:.3f} ms | "
@@ -211,6 +234,12 @@ def _print_report(report: EffectiveSelectionEvaluationReport, *, details: bool) 
         )
         typer.echo(f"    raw:       {raw_ids}")
         typer.echo(f"    effective: {effective_ids}")
+        typer.echo(
+            "    policy mandatory: "
+            f"raw={pair.raw_policy_mandatory_hits}/{pair.policy_mandatory_total} | "
+            f"effective={pair.effective_policy_mandatory_hits}/"
+            f"{pair.policy_mandatory_total}"
+        )
         if pair.policy_added_evidence_ids:
             typer.echo("    policy added: " + ", ".join(pair.policy_added_evidence_ids))
         if pair.policy_dropped_evidence_ids:
