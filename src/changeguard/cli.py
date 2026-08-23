@@ -4,6 +4,7 @@ from pathlib import Path
 
 import typer
 
+from changeguard import __version__
 from changeguard.dependency_graph import ServiceDependencyGraphBuilder
 from changeguard.effective_selection_evaluation_cli import evaluate_selector_policy_cmd
 from changeguard.evaluation_cli import evaluate_cmd
@@ -11,6 +12,7 @@ from changeguard.git_client import GitError
 from changeguard.github_client import GitHubAPIError, GitHubClient
 from changeguard.java_analyzer import JavaAnalyzerError
 from changeguard.models import VerificationStatus
+from changeguard.release_evaluation_cli import evaluate_release_cmd
 from changeguard.remote_scanner import scan_pull_request
 from changeguard.scanner import scan
 from changeguard.selection_evaluation_cli import (
@@ -23,6 +25,7 @@ from changeguard.verification import (
     create_maven_module_plan,
     execute_verification_plan,
 )
+from changeguard.verification_plan_cli import verify_plan_cmd
 
 app = typer.Typer(
     help="ChangeGuard: deterministic change-impact evidence before AI reasoning."
@@ -30,8 +33,10 @@ app = typer.Typer(
 app.command("evaluate")(evaluate_cmd)
 app.command("evaluate-selector")(evaluate_selector_cmd)
 app.command("evaluate-selector-policy")(evaluate_selector_policy_cmd)
+app.command("evaluate-release")(evaluate_release_cmd)
 app.command("compare-selector-evals")(compare_selector_evals_cmd)
 app.command("synthesize")(synthesize_cmd)
+app.command("verify-plan")(verify_plan_cmd)
 
 
 def _format_endpoint(endpoint) -> str:
@@ -155,6 +160,7 @@ def _print_verification_plans(manifest) -> None:
         if plan.endpoint is not None:
             typer.echo("    endpoint: " + _format_endpoint(plan.endpoint))
         typer.echo("    command: " + " ".join(plan.command))
+        typer.echo(f"    expected HEAD: {plan.expected_head or 'unbound'}")
         typer.echo(f"    status: {plan.status.value}")
         typer.echo(f"    reason: {plan.reason}")
 
@@ -164,17 +170,8 @@ def _print_manifest(manifest, json_output: bool) -> None:
         typer.echo(manifest.model_dump_json(indent=2))
         return
 
-    if manifest.verification_planning_enabled:
-        version = "V3.0"
-    elif manifest.impact_analysis_enabled:
-        version = "V2.2"
-    elif manifest.dependency_graph is not None:
-        version = "V2"
-    else:
-        version = "V1"
-
     typer.echo(
-        f"ChangeGuard {version} | {manifest.base[:12]} -> {manifest.head[:12]} | "
+        f"ChangeGuard {__version__} | {manifest.base[:12]} -> {manifest.head[:12]} | "
         f"{manifest.changed_file_count} changed file(s)"
     )
     typer.echo(f"repository: {manifest.repo}")
@@ -319,6 +316,11 @@ def verify_cmd(
         "--module",
         help="Consumer Maven module path relative to the repository root.",
     ),
+    expected_head: str | None = typer.Option(
+        None,
+        "--expected-head",
+        help="Optional exact Git HEAD binding for explicit manual verification.",
+    ),
     timeout_seconds: int = typer.Option(
         DEFAULT_TIMEOUT_SECONDS,
         "--timeout",
@@ -332,7 +334,7 @@ def verify_cmd(
     ),
 ) -> None:
     """Explicitly run targeted Maven module tests in a local workspace."""
-    plan = create_maven_module_plan(consumer, module)
+    plan = create_maven_module_plan(consumer, module, expected_head=expected_head)
     result = execute_verification_plan(plan, repo, timeout_seconds=timeout_seconds)
 
     if json_output:
@@ -340,6 +342,8 @@ def verify_cmd(
     else:
         typer.echo(f"verification status: {result.status.value}")
         typer.echo("command: " + " ".join(result.plan.command))
+        if result.plan.expected_head:
+            typer.echo(f"expected HEAD: {result.plan.expected_head}")
         typer.echo(f"workspace: {repo.resolve()}")
         if result.exit_code is not None:
             typer.echo(f"exit code: {result.exit_code}")
@@ -395,9 +399,9 @@ def scan_pr_cmd(
         False,
         "--verification-plan/--no-verification-plan",
         help=(
-            "Create reviewable targeted Maven test plans for endpoint-level impact "
-            "candidates. Implies impact, semantic, and dependency analysis but does not "
-            "execute remote project code."
+            "Create reviewable, revision-bound targeted Maven test plans for endpoint-level "
+            "impact candidates. Implies impact, semantic, and dependency analysis but does "
+            "not execute remote project code."
         ),
     ),
     json_output: bool = typer.Option(
