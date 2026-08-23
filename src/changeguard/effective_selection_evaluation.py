@@ -13,11 +13,13 @@ from changeguard.selection_evaluation import (
     SelectionRunEvaluation,
 )
 from changeguard.synthesis import (
+    EvidenceCategory,
     EvidenceSelector,
     SynthesisGuardrailError,
     SynthesisSelection,
     _validate_selection as validate_selection,
     apply_decision_critical_policy,
+    decision_critical_evidence_ids,
 )
 
 
@@ -31,6 +33,22 @@ class SelectionQualitySummary(BaseModel):
     mean_pairwise_jaccard: float | None
 
 
+class PolicyMandatorySummary(BaseModel):
+    raw_hits: int
+    raw_total: int
+    raw_retention: float | None
+    effective_hits: int
+    effective_total: int
+    effective_retention: float | None
+
+
+class CorpusPolicyDiagnostic(BaseModel):
+    case_id: str
+    code: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    message: str
+
+
 class EffectiveSelectionRunPair(BaseModel):
     case_id: str
     run_index: int
@@ -38,6 +56,10 @@ class EffectiveSelectionRunPair(BaseModel):
     effective: SelectionRunEvaluation | None = None
     policy_added_evidence_ids: list[str] = Field(default_factory=list)
     policy_dropped_evidence_ids: list[str] = Field(default_factory=list)
+    policy_mandatory_evidence_ids: list[str] = Field(default_factory=list)
+    raw_policy_mandatory_hits: int = 0
+    effective_policy_mandatory_hits: int = 0
+    policy_mandatory_total: int = 0
 
 
 class EffectiveSelectionEvaluationReport(BaseModel):
@@ -59,6 +81,8 @@ class EffectiveSelectionEvaluationReport(BaseModel):
     policy_dropped_evidence_total: int
     raw_quality: SelectionQualitySummary
     effective_quality: SelectionQualitySummary
+    policy_mandatory: PolicyMandatorySummary
+    corpus_policy_diagnostics: list[CorpusPolicyDiagnostic] = Field(default_factory=list)
     p50_provider_latency_ms: float
     p95_provider_latency_ms: float
     input_tokens_total: int | None = None
@@ -153,6 +177,8 @@ def evaluate_effective_selector(
         ),
         raw_quality=_quality_summary(raw_valid, runs_per_case),
         effective_quality=_quality_summary(effective_valid, runs_per_case),
+        policy_mandatory=_policy_mandatory_summary(measured),
+        corpus_policy_diagnostics=_diagnose_corpus_policy(corpus),
         p50_provider_latency_ms=_percentile(latencies, 0.50),
         p95_provider_latency_ms=_percentile(latencies, 0.95),
         input_tokens_total=sum(input_tokens) if input_tokens else None,
@@ -166,6 +192,9 @@ def _evaluate_pair(
     selector: EvidenceSelector,
     run_index: int,
 ) -> tuple[EffectiveSelectionRunPair, SynthesisSelection | None]:
+    mandatory_ids = decision_critical_evidence_ids(case.evidence)
+    mandatory_set = set(mandatory_ids)
+    mandatory_total = len(mandatory_ids)
     started = time.perf_counter()
     try:
         selection = selector.select(case.evidence)
@@ -178,7 +207,16 @@ def _evaluate_pair(
             error=str(exc),
             latency_ms=(time.perf_counter() - started) * 1000.0,
         )
-        return EffectiveSelectionRunPair(case_id=case.id, run_index=run_index, raw=raw), None
+        return (
+            EffectiveSelectionRunPair(
+                case_id=case.id,
+                run_index=run_index,
+                raw=raw,
+                policy_mandatory_evidence_ids=mandatory_ids,
+                policy_mandatory_total=mandatory_total,
+            ),
+            None,
+        )
     except Exception as exc:
         raw = SelectionRunEvaluation(
             case_id=case.id,
@@ -188,16 +226,29 @@ def _evaluate_pair(
             error=f"Selector raised {type(exc).__name__}: {exc}",
             latency_ms=(time.perf_counter() - started) * 1000.0,
         )
-        return EffectiveSelectionRunPair(case_id=case.id, run_index=run_index, raw=raw), None
+        return (
+            EffectiveSelectionRunPair(
+                case_id=case.id,
+                run_index=run_index,
+                raw=raw,
+                policy_mandatory_evidence_ids=mandatory_ids,
+                policy_mandatory_total=mandatory_total,
+            ),
+            None,
+        )
 
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     raw = _score_selection(case, selection, run_index, elapsed_ms)
+    raw_mandatory_hits = len(set(selection.selected_evidence_ids) & mandatory_set)
     if not raw.guardrail_passed:
         return (
             EffectiveSelectionRunPair(
                 case_id=case.id,
                 run_index=run_index,
                 raw=raw,
+                policy_mandatory_evidence_ids=mandatory_ids,
+                raw_policy_mandatory_hits=raw_mandatory_hits,
+                policy_mandatory_total=mandatory_total,
             ),
             selection,
         )
@@ -216,17 +267,27 @@ def _evaluate_pair(
             input_tokens=selection.input_tokens,
             output_tokens=selection.output_tokens,
         )
+        effective_mandatory_hits = len(
+            set(effective.selected_evidence_ids) & mandatory_set
+        )
         return (
             EffectiveSelectionRunPair(
                 case_id=case.id,
                 run_index=run_index,
                 raw=raw,
                 effective=effective,
+                policy_mandatory_evidence_ids=mandatory_ids,
+                raw_policy_mandatory_hits=raw_mandatory_hits,
+                effective_policy_mandatory_hits=effective_mandatory_hits,
+                policy_mandatory_total=mandatory_total,
             ),
             selection,
         )
 
     effective = _score_selection(case, effective_selection, run_index, elapsed_ms)
+    effective_mandatory_hits = len(
+        set(effective_selection.selected_evidence_ids) & mandatory_set
+    )
     return (
         EffectiveSelectionRunPair(
             case_id=case.id,
@@ -235,6 +296,10 @@ def _evaluate_pair(
             effective=effective,
             policy_added_evidence_ids=effective_selection.policy_added_evidence_ids,
             policy_dropped_evidence_ids=effective_selection.policy_dropped_evidence_ids,
+            policy_mandatory_evidence_ids=mandatory_ids,
+            raw_policy_mandatory_hits=raw_mandatory_hits,
+            effective_policy_mandatory_hits=effective_mandatory_hits,
+            policy_mandatory_total=mandatory_total,
         ),
         selection,
     )
@@ -314,6 +379,81 @@ def _quality_summary(
         ),
         mean_pairwise_jaccard=_mean_pairwise_jaccard(valid_runs, runs_per_case),
     )
+
+
+def _policy_mandatory_summary(
+    measured: list[EffectiveSelectionRunPair],
+) -> PolicyMandatorySummary:
+    raw_valid = [pair for pair in measured if pair.raw.guardrail_passed]
+    effective_valid = [
+        pair
+        for pair in measured
+        if pair.effective is not None and pair.effective.guardrail_passed
+    ]
+    raw_hits = sum(pair.raw_policy_mandatory_hits for pair in raw_valid)
+    raw_total = sum(pair.policy_mandatory_total for pair in raw_valid)
+    effective_hits = sum(
+        pair.effective_policy_mandatory_hits for pair in effective_valid
+    )
+    effective_total = sum(pair.policy_mandatory_total for pair in effective_valid)
+    return PolicyMandatorySummary(
+        raw_hits=raw_hits,
+        raw_total=raw_total,
+        raw_retention=_optional_ratio(raw_hits, raw_total),
+        effective_hits=effective_hits,
+        effective_total=effective_total,
+        effective_retention=_optional_ratio(effective_hits, effective_total),
+    )
+
+
+def _diagnose_corpus_policy(
+    corpus: SelectionBenchmarkCorpus,
+) -> list[CorpusPolicyDiagnostic]:
+    diagnostics: list[CorpusPolicyDiagnostic] = []
+    for case in corpus.cases:
+        evidence_by_id = {item.id: item for item in case.evidence}
+        mandatory_ids = set(decision_critical_evidence_ids(case.evidence))
+
+        mandatory_distractors = sorted(
+            mandatory_ids.intersection(case.distractor_evidence_ids)
+        )
+        if mandatory_distractors:
+            diagnostics.append(
+                CorpusPolicyDiagnostic(
+                    case_id=case.id,
+                    code="distractor-is-policy-mandatory",
+                    evidence_ids=mandatory_distractors,
+                    message=(
+                        "The corpus labels runtime policy-mandatory evidence as a "
+                        "distractor. Effective policy closure will preserve these IDs."
+                    ),
+                )
+            )
+
+        has_active_impact = any(
+            item.category == EvidenceCategory.IMPACT for item in case.evidence
+        )
+        if not has_active_impact:
+            continue
+        for evidence_id in case.required_evidence_ids:
+            item = evidence_by_id[evidence_id]
+            if (
+                item.category == EvidenceCategory.SEMANTIC_CHANGE
+                and evidence_id not in mandatory_ids
+            ):
+                diagnostics.append(
+                    CorpusPolicyDiagnostic(
+                        case_id=case.id,
+                        code="required-semantic-not-provenance-linked",
+                        evidence_ids=[evidence_id],
+                        message=(
+                            "Required semantic evidence does not share source-path "
+                            "provenance with any active impact in this corpus case, so "
+                            "decision-critical closure cannot guarantee it."
+                        ),
+                    )
+                )
+    return diagnostics
 
 
 def _mean_pairwise_jaccard(
