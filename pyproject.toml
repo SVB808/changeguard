@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "changeguard"
-version = "0.1.0"
+version = "1.0.0rc1"
 description = "Cross-service change impact and release risk analysis for Java/Spring systems."
 readme = "README.md"
 requires-python = ">=3.11"
