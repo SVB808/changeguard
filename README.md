@@ -1,120 +1,123 @@
 # ChangeGuard
 
-ChangeGuard is a cross-service change-impact and release-risk engine for Java/Spring microservices.
+**ChangeGuard is a deterministic-first cross-service change-impact and release-risk engine for Java/Spring microservices.**
 
-The core question is:
+Its core question is:
 
-> **If this change is merged, what can it break outside the files that changed?**
+> **If this change is merged, what can break outside the files that changed?**
 
-The project is built around one evidence discipline:
+Most code-review tools stop at the diff. ChangeGuard connects a provider-side change to downstream services, explicit consumer call sites, targeted verification and grounded AI synthesis while keeping source-of-truth facts deterministic.
 
 ```text
-evidence -> impact inference -> verification -> grounded synthesis
+evidence -> inference -> verification -> grounded synthesis
 ```
 
-Deterministic analysis remains the source of truth. LangGraph and optional model-backed selectors operate only on evidence ChangeGuard has already produced.
+The current package is the `1.0.0rc1` release candidate.
 
-## Current milestone: V5.2 evaluated grounded evidence selection
+## Why this project exists
 
-The current pipeline can:
+A diff is often not enough to understand release impact. A Spring controller method may inherit an unchanged class-level route; a consumer may still call an old endpoint; a nested Maven reactor may require a different verification command; and a model-generated explanation is only trustworthy if it cannot invent evidence.
 
-1. inspect local Git refs or a public GitHub pull request,
-2. classify changed engineering surfaces,
-3. fetch full before/after Java source at exact Git revisions,
-4. parse Spring REST and Spring Security semantics with a JVM AST analyzer,
-5. discover Maven services without Petclinic-specific naming assumptions,
-6. build a module-scoped cross-service dependency graph,
-7. extract explicit WebClient, OpenFeign, and RestTemplate consumer-call evidence,
-8. join compatibility-sensitive provider changes with consumer evidence,
-9. suppress non-matching service-level candidates while preserving their audit trail,
-10. create reactor-root-aware Maven verification plans,
-11. explicitly execute those plans only in a user-supplied local workspace,
-12. evaluate deterministic behavior against a versioned labeled REST corpus,
-13. synthesize supplied facts/inferences/verification evidence through LangGraph,
-14. optionally let OpenAI or a local Ollama model select only existing evidence IDs using structured output,
-15. evaluate evidence-selection quality separately from deterministic impact accuracy.
+ChangeGuard addresses those problems with explicit boundaries:
 
-The final synthesis wording and claim semantics remain deterministic even when model-backed selection is enabled.
+- Git and static analysis establish facts.
+- A service/contract graph establishes cross-service relationships.
+- Consumer-call matching refines impact candidates.
+- Verification is planned deterministically and executed only when a user explicitly requests it.
+- Model-backed synthesis may select only existing evidence IDs.
+- Deterministic guardrails and policy closure remain authoritative before rendering.
 
-## Deterministic evidence currently supported
+## Architecture
 
-Engineering surfaces:
+```mermaid
+flowchart LR
+  PR[GitHub PR / Git refs] --> X[Change extraction]
+  X --> J[Java/Spring AST analysis]
+  J --> G[Module-scoped service graph]
+  G --> C[WebClient / Feign / RestTemplate calls]
+  C --> I[Impact refinement]
+  I --> P[Revision-bound verification plans]
+  P --> V[Explicit local verifier]
+  V --> E[Verification evidence]
+  I --> S[Grounded LangGraph synthesis]
+  E --> S
+  S --> M{Evidence selector}
+  M -->|offline| D[Deterministic selector]
+  M -->|local| O[Ollama]
+  M -->|cloud opt-in| A[OpenAI]
+  D --> R[Grounding validation]
+  O --> R
+  A --> R
+  R --> K[Decision-critical policy closure]
+  K --> F[Deterministic renderer]
+```
 
-- API contract
-- database
-- security
-- messaging
-- configuration
-- dependency/build
-- Java code
-- deployment
-- observability
+The model never receives authority to parse arbitrary source code, execute repository commands, create evidence IDs or write an unconstrained final risk report.
 
-Spring REST semantic changes:
+## Supported evidence today
 
-- endpoint added
-- endpoint removed
+ChangeGuard currently understands the following deterministic evidence surfaces.
+
+**Spring REST semantics**
+
+- endpoint added / removed
 - endpoint path changed
 - HTTP method changed
 - request signature changed
 - response type changed
+- class-level + method-level route composition from full before/after source
 
-Spring Security semantic changes:
+**Spring Security semantics**
 
-- security policy added
-- security policy removed
-- security policy changed
-- authorization selectors/actions
-- explicitly disabled CSRF, CORS, HTTP Basic, and form login
+- security policy added / removed / changed
+- authorization selectors and actions
+- explicitly disabled CSRF, CORS, HTTP Basic and form login
 
-Cross-service evidence:
+**Cross-service evidence**
 
 - Spring Cloud Gateway `lb://service` routes
-- explicit service URLs in configuration
-- explicit service URLs in Java client-like classes
+- service URLs in configuration
+- config-server imports
+- explicit Java client service URLs
 - WebClient fluent calls
 - OpenFeign declarations
 - RestTemplate calls
-- config-server imports
+- module-scoped service identity
 
-## Why deterministic-first?
+**Verification planning**
 
-An LLM should reason over evidence, not rediscover basic facts that Git and static analysis can provide more reliably.
+- endpoint-level impact only
+- Maven module targeting
+- nested reactor-root-aware `-f` and `-pl` commands
+- exact analyzed Git-head binding for generated plans
 
-For example, a PR diff may show only:
-
-```java
-@GetMapping("/health")
-```
-
-while an unchanged class-level annotation contains:
-
-```java
-@RequestMapping("/vets")
-```
-
-ChangeGuard reads the full source at both revisions and derives the actual endpoint as `GET /vets/health`.
-
-The same principle applies across services. A service dependency alone is not enough to claim breakage. When explicit consumer-call evidence is available, ChangeGuard compares HTTP method and normalized route before keeping or suppressing an impact candidate.
+Other engineering surfaces such as database, messaging, deployment, config and observability are classified, but their deeper contract semantics are intentionally not presented as complete yet.
 
 ## Quick start
 
-Python 3.11+ and Java 17+ are required.
+Requirements: Python 3.11+ and Java 17+.
 
 ```bash
 python -m venv .venv
+```
 
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
+Windows PowerShell:
 
-# macOS/Linux
-# source .venv/bin/activate
-
+```powershell
+.\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 pytest
 ```
 
-Build and test the Java/Spring analyzer:
+macOS/Linux:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+pytest
+```
+
+Build/test the JVM AST analyzer:
 
 ```bash
 mvn -f analyzers/java-spring/pom.xml test
@@ -123,184 +126,81 @@ mvn -f analyzers/java-spring/pom.xml package
 
 For repeated public GitHub analysis, set `GITHUB_TOKEN` to avoid the low unauthenticated API rate limit.
 
-## Analyze a public GitHub PR
+## Analyze a public pull request
 
-Basic semantic scan:
+Basic semantic analysis:
 
-```bash
-changeguard pr \
-  --repo spring-petclinic/spring-petclinic-microservices \
+```powershell
+changeguard pr `
+  --repo spring-petclinic/spring-petclinic-microservices `
   --pr 494
 ```
 
-Add dependency context:
+Cross-service impact analysis:
 
-```bash
-changeguard pr \
-  --repo spring-petclinic/spring-petclinic-microservices \
-  --pr 494 \
-  --dependencies
-```
-
-Generate/refine cross-service impact candidates:
-
-```bash
-changeguard pr \
-  --repo spring-petclinic/spring-petclinic-microservices \
-  --pr 253 \
+```powershell
+changeguard pr `
+  --repo spring-petclinic/spring-petclinic-microservices `
+  --pr 253 `
   --impacts
 ```
 
 Create reviewable verification plans:
 
-```bash
-changeguard pr \
-  --repo owner/repository \
-  --pr 123 \
+```powershell
+changeguard pr `
+  --repo owner/repository `
+  --pr 123 `
   --verification-plan
 ```
 
-`--verification-plan` implies semantic, dependency, and impact analysis. It does **not** execute remote project code.
+`--verification-plan` implies semantic, dependency and impact analysis. It does **not** execute remote project code.
 
-Structured JSON is available with `--json`.
+Use `--json` to emit a `ChangeManifest`.
 
-## Build a service dependency graph
+## Revision-bound verification
 
-```bash
-changeguard graph \
-  --repo spring-petclinic/spring-petclinic-microservices \
-  --ref main
+Generated PR verification plans now carry the exact analyzed `expected_head`.
+
+A plan can be executed explicitly from a local checkout:
+
+```powershell
+changeguard verify-plan `
+  --manifest manifest.json `
+  --repo . `
+  --plan-index 0
 ```
 
-Service identity is scoped by module path, so two separate Maven workspaces may both contain a logical `provider-service` without being conflated.
-
-## Reactor-root-aware verification plans
-
-Nested Maven builds are preserved explicitly. A plan may look like:
+Before Maven is resolved or project code executes, ChangeGuard reads:
 
 ```text
-mvn -f benchmarks/client-style-path-break/pom.xml -pl feign-consumer-service -am test
+git rev-parse HEAD
 ```
 
-instead of assuming the Git repository root contains the relevant aggregator POM.
+If local `HEAD != expected_head`, verification returns `ERROR` and refuses execution. This prevents evidence derived from commit A from being silently associated with tests run against commit B.
 
-Remote PR analysis only creates plans. Local execution remains explicit:
+The lower-level `changeguard verify` command remains available for explicit manual module checks and accepts an optional `--expected-head` binding.
 
-```bash
-changeguard verify \
-  --repo /path/to/checked-out/repository \
-  --consumer api-gateway \
-  --module spring-petclinic-api-gateway
-```
+## Grounded synthesis
 
-Verification records process evidence: status, exit code, duration, and bounded stdout/stderr tails.
-
-A `PASSED` build does not automatically mean a change is safe. A `FAILED` build does not automatically prove that an impact candidate caused the failure.
-
-## Seeded end-to-end verification cases
-
-The repository contains controlled Maven benchmarks that prove the full deterministic vertical.
-
-WebClient-style seeded path break:
-
-```text
-provider path change
-  -> exact WebClient consumer-call match
-  -> endpoint-level impact
-  -> targeted Maven plan
-  -> consumer contract test failure
-```
-
-Feign + RestTemplate seeded path break:
-
-```text
-provider GET /orders/{orderId}
-        -> GET /purchases/{orderId}
-
-OpenFeign consumer still calls /orders/{orderId}
-RestTemplate consumer still calls /orders/{orderId}
-
-=> 2 endpoint-level impacts
-=> 2 targeted Maven plans
-=> 2 controlled consumer contract failures
-```
-
-## Controlled deterministic benchmark evaluation
-
-The current REST corpus is `rest-impact-v3` with 24 labeled cases.
-
-```bash
-changeguard evaluate
-changeguard evaluate --details
-changeguard evaluate --json
-changeguard evaluate --strict
-```
-
-The evaluator reports:
-
-- impact-detection TP/FP/TN/FN, precision, recall, and false-positive rate,
-- endpoint-evidence precision/recall/FPR,
-- verification-plan decision accuracy,
-- p50/p95 in-process deterministic-core latency,
-- consumer-technology breakdown for explicitly labeled WebClient, Feign, and RestTemplate cases.
-
-The current controlled corpus is expected to remain 24/24 under CI. These are **controlled-corpus metrics**, not claims of production accuracy. Deterministic-core latency excludes GitHub access, JVM parsing, Maven execution, and model inference.
-
-## Grounded LangGraph synthesis
-
-V5 adds a four-node synthesis graph:
-
-```text
-ChangeManifest + optional VerificationResult(s)
-        ↓
-collect_evidence
-        ↓
-select_evidence
-        ↓
-validate_selection
-        ↓
-render_report
-```
-
-Evidence is typed as:
-
-- `fact` — deterministic semantic/dependency/plan evidence,
-- `inference` — ChangeGuard impact/suppression conclusions,
-- `verification` — outcomes of explicitly executed checks.
-
-Create a deterministic manifest:
+Create a manifest first:
 
 ```powershell
 changeguard pr `
   --repo SVB808/changeguard `
   --pr 16 `
   --verification-plan `
-  --json | Out-File -Encoding utf8 manifest.json
+  --json |
+  Out-File -Encoding utf8 manifest.json
 ```
 
-Synthesize it offline:
+Offline deterministic synthesis:
 
 ```powershell
 changeguard synthesize --manifest manifest.json
 ```
 
-PowerShell BOM-prefixed UTF-8 JSON is accepted.
-
-## Model-backed evidence selectors
-
-The model receives already-derived evidence records and returns only a structured list of evidence IDs. It cannot write the final report. The LangGraph validation node rejects unknown, duplicate, or over-limit IDs before deterministic rendering.
-
-OpenAI is an optional cloud provider. Install the optional dependency, set `OPENAI_API_KEY`, and opt in explicitly:
-
-```bash
-python -m pip install -e ".[dev,ai]"
-
-changeguard synthesize \
-  --manifest manifest.json \
-  --selector openai
-```
-
-Ollama provides a local path with no API key or Python provider dependency:
+Local Ollama selection:
 
 ```powershell
 changeguard synthesize `
@@ -309,92 +209,169 @@ changeguard synthesize `
   --model llama3.2:3b
 ```
 
-Synthesis JSON records selector/model provenance and provider-reported input/output token counts when available.
+Optional OpenAI selection:
 
-See `docs/synthesis.md` and ADRs 0011–0013 for the grounding boundary and provider decisions.
-
-## V5.2 evidence-selection evaluation
-
-Model-selection quality is measured separately from deterministic impact accuracy with the versioned `synthesis-selection-v1` corpus.
-
-Deterministic baseline:
-
-```powershell
-changeguard evaluate-selector `
-  --selector deterministic `
-  --runs 3 `
-  --details
+```bash
+python -m pip install -e ".[dev,ai]"
+changeguard synthesize --manifest manifest.json --selector openai
 ```
 
-Local Ollama evaluation:
+PowerShell BOM-prefixed UTF-8 JSON is accepted.
+
+### Evidence-selection boundary
+
+Model-backed selectors receive typed evidence records and return only a structured list of evidence IDs. ChangeGuard then:
+
+1. rejects unknown IDs,
+2. rejects duplicate IDs,
+3. enforces the evidence budget,
+4. deterministically restores runtime-mandatory evidence,
+5. fails closed if mandatory evidence itself exceeds the budget,
+6. renders wording deterministically.
+
+Runtime-mandatory evidence currently includes actual verification results, active impact candidates and semantic changes linked to active impacts through runtime source-path provenance.
+
+## Canonical end-to-end demo
+
+The repository includes a reproducible public-PR workflow using `SVB808/changeguard#16`:
+
+```text
+public PR
+  -> exact before/after Java analysis
+  -> service + consumer-call evidence
+  -> endpoint-level impacts
+  -> revision-bound Maven plans
+  -> optional explicit local verification
+  -> grounded selector
+  -> deterministic policy closure
+  -> deterministic report
+```
+
+See [`docs/demo.md`](docs/demo.md) for the exact PowerShell commands and safety boundaries.
+
+## Evaluation
+
+ChangeGuard keeps deterministic impact evaluation separate from model-selection evaluation.
+
+### Deterministic impact corpus
+
+```powershell
+changeguard evaluate --strict
+```
+
+The current `rest-impact-v3` controlled corpus contains 24 cases. CI requires all 24 disposition + verification-plan expectations to match. The evaluator also reports impact and endpoint TP/FP/TN/FN, precision/recall/FPR, technology breakdown and deterministic-core latency.
+
+These are **controlled-corpus metrics**, not production accuracy. Latency excludes GitHub access, JVM parsing, Maven execution and model inference.
+
+### Raw selector evaluation
 
 ```powershell
 changeguard evaluate-selector `
   --selector ollama `
   --model llama3.2:3b `
+  --warmup-runs 1 `
+  --runs 3
+```
+
+Metrics include required-evidence recall, precision, distractor rate, distinct-consumer coverage, verification retention, grounding, latency, tokens and repeated-run stability.
+
+### Raw vs effective policy evaluation
+
+```powershell
+changeguard evaluate-selector-policy `
+  --corpus benchmarks/evaluation/synthesis-selection-v2.json `
+  --selector ollama `
+  --model llama3.2:3b `
+  --warmup-runs 1 `
+  --runs 3
+```
+
+This reports model quality and post-policy effective quality from the **same provider call**, so deterministic corrections are visible instead of being hidden inside an aggregate score.
+
+### Production-shaped release evaluation
+
+```powershell
+changeguard evaluate-release `
+  --selector deterministic `
   --runs 3 `
-  --details
+  --strict
 ```
 
-The evaluator reports:
+`evaluate-release` combines:
 
-- selector success rate,
-- deterministic grounding-guardrail pass rate,
-- required-evidence recall,
-- selection precision,
-- distractor-selection rate,
-- distinct-consumer coverage,
-- verification-evidence retention,
-- mean pairwise Jaccard stability across repeated runs,
-- selector p50/p95 latency,
-- provider input/output token totals when available.
+- the `rest-impact-v3` deterministic gate, and
+- `synthesis-selection-runtime-v1`, whose evidence is generated by the production `collect_evidence()` function from typed manifests/results.
 
-The controlled corpus includes prompt-injection-like repository text and selection-budget pressure above the 12-item cap. `--strict` gates provider/selector availability and grounding only; model-quality thresholds are intentionally not hard-coded yet.
+For local model measurement:
 
-These are **controlled evidence-selection metrics**, not production breakage prediction accuracy. See `docs/selection-evaluation.md` and ADR 0014.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  PR[GitHub PR / Git refs] --> E[Change extraction]
-  E --> S[Java/Spring semantic evidence]
-  S --> G[Module-scoped service dependency graph]
-  G --> C[WebClient / Feign / RestTemplate evidence]
-  C --> I[Impact candidate refinement]
-  I --> P[Reactor-aware verification plan]
-  P --> V[Explicit local verifier]
-  V --> R[Verification evidence]
-  I --> B[Deterministic benchmark evaluator]
-  I --> L[LangGraph synthesis]
-  R --> L
-  L --> M{Selector}
-  M -->|default| D[Deterministic ranking]
-  M -->|optional cloud| O[OpenAI structured evidence IDs]
-  M -->|optional local| Q[Ollama structured evidence IDs]
-  D --> X[Guardrail validation]
-  O --> X
-  Q --> X
-  X --> Y[Deterministic report renderer]
-  M --> SE[Selection benchmark evaluator]
+```powershell
+changeguard evaluate-release `
+  --selector ollama `
+  --model llama3.2:3b `
+  --warmup-runs 1 `
+  --runs 3
 ```
 
-## Current non-goals
+The overall release gate requires deterministic corpus exactness, full grounding, 100% effective runtime policy-mandatory retention and no runtime-corpus policy-semantic contradictions. See [`docs/release-evaluation.md`](docs/release-evaluation.md).
 
-- claiming that a passing test run proves safety
-- claiming that a failing test run proves causality
-- claiming small controlled-corpus scores are production accuracy
-- executing arbitrary remote PR build code automatically
-- using an LLM to parse raw source code
-- allowing a model to invent evidence or free-form risk findings
-- assigning arbitrary risk scores
-- mutating target repositories
+## Seeded verification benchmarks
 
-## Planned next layers
+The repository contains controlled Maven fixtures for WebClient, OpenFeign and RestTemplate path-break scenarios.
 
-- expand the selection corpus after real model runs expose failure modes
-- bind verification plans to an expected Git revision before any autonomous execution is considered
-- add database migration and messaging contract semantics
-- stronger verification with Pact/Testcontainers/sandboxing
-- narrowly permissioned specialized agents after tool boundaries are explicit
-- GitHub Check / PR integration
+One seeded vertical is:
+
+```text
+provider GET /orders/{orderId}
+        -> GET /purchases/{orderId}
+
+Feign consumer still calls /orders/{orderId}
+RestTemplate consumer still calls /orders/{orderId}
+
+=> endpoint-level consumer impacts
+=> targeted reactor-aware verification plans
+=> controlled consumer contract-test failures
+```
+
+These fixtures test the deterministic vertical and command construction. They are not evidence that arbitrary real repositories will behave identically.
+
+## Key safety / correctness invariants
+
+- No automatic execution of remote PR code.
+- Generated verification is bound to the analyzed Git revision.
+- Unknown model evidence IDs fail grounding validation.
+- The model cannot remove runtime-mandatory evidence from the effective report.
+- Mandatory evidence over budget fails closed rather than silently truncating consumers.
+- A passing command is not described as universal safety proof.
+- A failing command is not described as automatic causal proof.
+- Controlled benchmark scores are not labeled as production accuracy.
+- Target repositories are never mutated by analysis.
+
+## Current limitations
+
+The supported scope is intentionally explicit:
+
+- Maven is the only verification build system currently implemented.
+- Maven layout discovery uses direct reactor/module evidence rather than full effective-model/profile resolution.
+- Consumer-call extraction focuses on static/literal routes supported by WebClient, Feign and RestTemplate analyzers.
+- Dynamic routes and unsupported client frameworks may remain at service-level evidence or be outside explicit call refinement.
+- Database migration and messaging-contract semantics are not yet deep enough for release guarantees.
+- A matching Git `HEAD` does not prove an otherwise clean/hermetic workspace.
+- Model quality depends on provider/model/runtime; deterministic policy invariants are evaluated separately for this reason.
+- OpenAI live execution requires an active API account/billing; CI validates only the provider request contract without network calls.
+
+## Design decisions
+
+Architecture decisions are recorded under [`docs/decisions`](docs/decisions). Important boundaries include deterministic-first analysis, module-scoped identity, reactor-aware verification, LangGraph grounding, provider-backed evidence-ID selection, local Ollama selection, model-evaluation protocol, deterministic decision-critical closure, revision binding and runtime-shaped release evaluation.
+
+## Post-V1 extensions
+
+Useful follow-on work that should not block the V1 portfolio release:
+
+- Gradle verification planning
+- deeper database migration compatibility analysis
+- messaging schema/consumer compatibility
+- broader dynamic HTTP client extraction
+- Pact/Testcontainers or sandbox-backed verification
+- GitHub Check / PR comment integration
+- a small hosted UI
+- narrowly permissioned agent orchestration after tool boundaries remain explicit
