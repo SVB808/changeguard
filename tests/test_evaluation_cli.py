@@ -10,7 +10,7 @@ def test_evaluate_command_reports_reference_corpus_metrics_and_technology_breakd
     result = runner.invoke(app, ["evaluate"])
 
     assert result.exit_code == 0
-    assert "ChangeGuard V4.2 | corpus: rest-impact-v3 | 24 case(s)" in result.stdout
+    assert "ChangeGuard 1.0.0rc1 impact evaluation | corpus: rest-impact-v3 | 24 case(s)" in result.stdout
     assert "24/24 (100.0%)" in result.stdout
     assert "TP=13 FP=0 TN=11 FN=0" in result.stdout
     assert "precision=1.000 recall=1.000 FPR=0.000" in result.stdout
