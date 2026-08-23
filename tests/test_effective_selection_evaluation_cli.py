@@ -1,5 +1,6 @@
 from typer.testing import CliRunner
 
+from changeguard import __version__
 from changeguard.cli import app
 
 
@@ -13,7 +14,7 @@ def test_effective_selector_cli_reports_raw_and_post_policy_quality():
     )
 
     assert result.exit_code == 0
-    assert "ChangeGuard V5.3.1" in result.stdout
+    assert f"ChangeGuard {__version__} policy evaluation" in result.stdout
     assert "corpus: synthesis-selection-v1" in result.stdout
     assert "raw selector quality:" in result.stdout
     assert "effective quality after deterministic decision-critical closure:" in result.stdout
