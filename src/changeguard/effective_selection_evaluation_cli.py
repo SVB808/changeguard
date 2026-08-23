@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
+from changeguard import __version__
 from changeguard.effective_selection_evaluation import (
     EffectiveSelectionEvaluationReport,
     SelectionQualitySummary,
@@ -137,7 +138,7 @@ def _create_selector(selector_name: str, *, model: str | None, ollama_url: str):
 def _print_report(report: EffectiveSelectionEvaluationReport, *, details: bool) -> None:
     model = f" | model={report.model}" if report.model else ""
     typer.echo(
-        f"ChangeGuard V5.3.1 | corpus: {report.corpus_version} | "
+        f"ChangeGuard {__version__} policy evaluation | corpus: {report.corpus_version} | "
         f"selector={report.selector}{model}"
     )
     mode = "cold/normal-call"
