@@ -40,6 +40,14 @@ jobs:
       - name: Run deterministic selector grounding gate
         run: changeguard evaluate-selector --selector deterministic --runs 2 --strict
 
+      - name: Run consolidated release-candidate gate
+        if: matrix.python-version == '3.12'
+        run: changeguard evaluate-release --selector deterministic --runs 2 --strict
+
+      - name: Smoke test installed CLI
+        if: matrix.python-version == '3.12'
+        run: changeguard --help
+
   ai-provider-contract:
     name: Optional AI provider contract
     runs-on: ubuntu-latest
