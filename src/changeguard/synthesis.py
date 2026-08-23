@@ -46,6 +46,8 @@ class SynthesisSelection(BaseModel):
     model: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    policy_added_evidence_ids: list[str] = Field(default_factory=list)
+    policy_dropped_evidence_ids: list[str] = Field(default_factory=list)
 
 
 class SynthesisReport(BaseModel):
@@ -205,8 +207,12 @@ def build_synthesis_graph(selector: EvidenceSelector | None = None):
         return {"selection": selector.select(state["evidence"])}
 
     def validate_node(state: SynthesisState) -> dict:
-        _validate_selection(state["evidence"], state["selection"])
-        return {}
+        evidence = state["evidence"]
+        raw_selection = state["selection"]
+        _validate_selection(evidence, raw_selection)
+        effective_selection = apply_decision_critical_policy(evidence, raw_selection)
+        _validate_selection(evidence, effective_selection)
+        return {"selection": effective_selection}
 
     def render_node(state: SynthesisState) -> dict:
         return {
@@ -246,6 +252,62 @@ def synthesize_manifest(
     return SynthesisReport.model_validate(output["report"])
 
 
+def apply_decision_critical_policy(
+    evidence: list[EvidenceItem],
+    selection: SynthesisSelection,
+) -> SynthesisSelection:
+    """Preserve decision-critical evidence after a selector returns grounded IDs.
+
+    Model selection remains useful for optional context, but it is not allowed to hide
+    actual verification results, active impact candidates, or semantic change facts that
+    are directly linked to an active impact through shared source-path provenance.
+    """
+    _validate_selection(evidence, selection)
+
+    verification_items = [
+        item for item in evidence if item.category == EvidenceCategory.VERIFICATION_RESULT
+    ]
+    impact_items = [item for item in evidence if item.category == EvidenceCategory.IMPACT]
+    impact_paths = {
+        path
+        for item in impact_items
+        for path in item.source_paths
+        if path
+    }
+    linked_semantic_items = [
+        item
+        for item in evidence
+        if item.category == EvidenceCategory.SEMANTIC_CHANGE
+        and impact_paths.intersection(item.source_paths)
+    ]
+
+    mandatory_items = verification_items + impact_items + linked_semantic_items
+    mandatory_ids = list(dict.fromkeys(item.id for item in mandatory_items))
+    if len(mandatory_ids) > MAX_SELECTED_EVIDENCE:
+        raise SynthesisGuardrailError(
+            "Decision-critical evidence exceeds the synthesis budget: "
+            f"{len(mandatory_ids)} required item(s) for a maximum of "
+            f"{MAX_SELECTED_EVIDENCE}. Refusing to silently omit active impact or "
+            "verification evidence."
+        )
+
+    raw_ids = selection.selected_evidence_ids
+    extras = [item_id for item_id in raw_ids if item_id not in set(mandatory_ids)]
+    available_extra_slots = MAX_SELECTED_EVIDENCE - len(mandatory_ids)
+    kept_extras = extras[:available_extra_slots]
+    effective_ids = mandatory_ids + kept_extras
+
+    added = [item_id for item_id in mandatory_ids if item_id not in raw_ids]
+    dropped = [item_id for item_id in raw_ids if item_id not in effective_ids]
+    return selection.model_copy(
+        update={
+            "selected_evidence_ids": effective_ids,
+            "policy_added_evidence_ids": added,
+            "policy_dropped_evidence_ids": dropped,
+        }
+    )
+
+
 def _validate_selection(
     evidence: list[EvidenceItem],
     selection: SynthesisSelection,
@@ -282,6 +344,10 @@ def _render_report(
     if selection.selector != "deterministic":
         caveats.append(
             "Model participation is limited to evidence-ID selection; deterministic guardrails validate every selected ID before rendering."
+        )
+    if selection.policy_added_evidence_ids or selection.policy_dropped_evidence_ids:
+        caveats.append(
+            "Deterministic decision-critical policy closure preserves verification results, active impact evidence, and directly linked semantic changes before rendering; optional selector context may be dropped to stay within the evidence budget."
         )
     if manifest.suppressed_impact_candidates:
         caveats.append(
