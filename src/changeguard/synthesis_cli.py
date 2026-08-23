@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
+from changeguard import __version__
 from changeguard.model_selector import (
     DEFAULT_OLLAMA_MODEL,
     DEFAULT_OLLAMA_URL,
@@ -98,9 +99,8 @@ def synthesize_cmd(
         typer.echo(report.model_dump_json(indent=2))
         return
 
-    version = "V5.1" if report.selector != "deterministic" else "V5.0"
     typer.echo(
-        f"ChangeGuard {version} synthesis | {report.repo} | "
+        f"ChangeGuard {__version__} synthesis | {report.repo} | "
         f"{report.base[:12]} -> {report.head[:12]}"
     )
     selector_line = f"selector: {report.selector}"
