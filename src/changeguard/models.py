@@ -268,6 +268,7 @@ class VerificationPlan(BaseModel):
     endpoint: SpringEndpoint | None = None
     command: list[str]
     reason: str
+    expected_head: str | None = None
     status: VerificationStatus = VerificationStatus.NOT_RUN
 
 
