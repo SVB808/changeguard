@@ -2,6 +2,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from changeguard import __version__
 from changeguard.cli import app
 from changeguard.selection_evaluation import evaluate_selector, load_selection_corpus
 from changeguard.synthesis import DeterministicEvidenceSelector
@@ -32,7 +33,7 @@ def test_evaluate_selector_reports_steady_state_warmup_protocol():
     )
 
     assert result.exit_code == 0
-    assert "ChangeGuard V5.2.1" in result.stdout
+    assert f"ChangeGuard {__version__} selector evaluation" in result.stdout
     assert "measurement mode: steady-state after 1 unscored warmup run(s) per case" in result.stdout
     assert "warmups: selector success=9/9 | grounding=9/9" in result.stdout
     assert "measured total: 18" in result.stdout
@@ -62,7 +63,7 @@ def test_compare_selector_evals_accepts_powershell_bom_and_reports_exact_match(t
     result = runner.invoke(app, ["compare-selector-evals", str(left), str(right)])
 
     assert result.exit_code == 0
-    assert "ChangeGuard V5.2.1 selector reproducibility" in result.stdout
+    assert f"ChangeGuard {__version__} selector reproducibility" in result.stdout
     assert "aligned measured runs: 18" in result.stdout
     assert "exact ordered selection match: 18/18 (100.0%)" in result.stdout
     assert "exact evidence-set match: 18/18 (100.0%)" in result.stdout
