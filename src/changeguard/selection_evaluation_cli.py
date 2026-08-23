@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
+from changeguard import __version__
 from changeguard.model_selector import (
     DEFAULT_OLLAMA_MODEL,
     DEFAULT_OLLAMA_URL,
@@ -186,7 +187,7 @@ def _create_selector(selector_name: str, *, model: str | None, ollama_url: str):
 def _print_report(report: SelectionEvaluationReport, *, details: bool) -> None:
     model = f" | model={report.model}" if report.model else ""
     typer.echo(
-        f"ChangeGuard V5.2.1 | corpus: {report.corpus_version} | "
+        f"ChangeGuard {__version__} selector evaluation | corpus: {report.corpus_version} | "
         f"selector={report.selector}{model}"
     )
     mode = "cold/normal-call"
@@ -295,7 +296,7 @@ def _print_comparison(
 ) -> None:
     model = f" | model={comparison.model}" if comparison.model else ""
     typer.echo(
-        f"ChangeGuard V5.2.1 selector reproducibility | "
+        f"ChangeGuard {__version__} selector reproducibility | "
         f"corpus={comparison.corpus_version} | selector={comparison.selector}{model}"
     )
     typer.echo(f"left:  {left}")
