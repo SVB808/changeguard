@@ -1,5 +1,6 @@
 from typer.testing import CliRunner
 
+from changeguard import __version__
 from changeguard.cli import app
 from changeguard.synthesis import SynthesisSelection
 
@@ -11,7 +12,7 @@ def test_evaluate_selector_defaults_to_deterministic_baseline():
     result = runner.invoke(app, ["evaluate-selector", "--runs", "2", "--strict"])
 
     assert result.exit_code == 0
-    assert "ChangeGuard V5.2.1" in result.stdout
+    assert f"ChangeGuard {__version__} selector evaluation" in result.stdout
     assert "corpus: synthesis-selection-v1" in result.stdout
     assert "selector=deterministic" in result.stdout
     assert "selector success: 18/18 (100.0%)" in result.stdout
