@@ -1,0 +1,10 @@
+package io.changeguard.analyzer;
+
+public enum EndpointChangeKind {
+    ENDPOINT_ADDED,
+    ENDPOINT_REMOVED,
+    ENDPOINT_PATH_CHANGED,
+    ENDPOINT_METHOD_CHANGED,
+    REQUEST_SIGNATURE_CHANGED,
+    RESPONSE_TYPE_CHANGED
+}

@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "changeguard"
-version = "0.1.0"
+version = "1.0.0rc1"
 description = "Cross-service change impact and release risk analysis for Java/Spring systems."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "langgraph>=1.2.10,<2.0",
   "pydantic>=2.7",
   "typer>=0.12",
 ]
@@ -16,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+]
+ai = [
+  "openai>=2.54,<4.0",
 ]
 
 [project.scripts]
