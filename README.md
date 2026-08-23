@@ -6,24 +6,25 @@ Its core question is:
 
 > **If this change is merged, what can break outside the files that changed?**
 
-Most code-review tools stop at the diff. ChangeGuard connects a provider-side change to downstream services, explicit consumer call sites, targeted verification and grounded AI synthesis while keeping source-of-truth facts deterministic.
+Most code-review tools stop at the diff. ChangeGuard connects provider-side changes to downstream services, explicit consumer call sites, targeted verification, and grounded AI synthesis while keeping source-of-truth facts deterministic.
 
 ```text
 evidence -> inference -> verification -> grounded synthesis
 ```
 
-The current package is the `1.0.0rc1` release candidate.
+The current package is the **`1.0.0rc1` release candidate**.
 
-## Why this project exists
+## What makes ChangeGuard different
 
-A diff is often not enough to understand release impact. A Spring controller method may inherit an unchanged class-level route; a consumer may still call an old endpoint; a nested Maven reactor may require a different verification command; and a model-generated explanation is only trustworthy if it cannot invent evidence.
+A diff is often not enough to understand release impact. A Spring controller method may inherit an unchanged class-level route; a downstream client may still call an old endpoint; a nested Maven reactor may require a different verification command; and a model-generated explanation is only useful if it cannot invent evidence.
 
 ChangeGuard addresses those problems with explicit boundaries:
 
 - Git and static analysis establish facts.
-- A service/contract graph establishes cross-service relationships.
+- A module-scoped service/contract graph establishes cross-service relationships.
 - Consumer-call matching refines impact candidates.
 - Verification is planned deterministically and executed only when a user explicitly requests it.
+- Generated verification plans are bound to the analyzed Git revision.
 - Model-backed synthesis may select only existing evidence IDs.
 - Deterministic guardrails and policy closure remain authoritative before rendering.
 
@@ -52,11 +53,9 @@ flowchart LR
   K --> F[Deterministic renderer]
 ```
 
-The model never receives authority to parse arbitrary source code, execute repository commands, create evidence IDs or write an unconstrained final risk report.
+The model never receives authority to parse arbitrary source code, execute repository commands, create evidence IDs, or write an unconstrained final risk report.
 
 ## Supported evidence today
-
-ChangeGuard currently understands the following deterministic evidence surfaces.
 
 **Spring REST semantics**
 
@@ -71,7 +70,7 @@ ChangeGuard currently understands the following deterministic evidence surfaces.
 
 - security policy added / removed / changed
 - authorization selectors and actions
-- explicitly disabled CSRF, CORS, HTTP Basic and form login
+- explicitly disabled CSRF, CORS, HTTP Basic, and form login
 
 **Cross-service evidence**
 
@@ -91,7 +90,7 @@ ChangeGuard currently understands the following deterministic evidence surfaces.
 - nested reactor-root-aware `-f` and `-pl` commands
 - exact analyzed Git-head binding for generated plans
 
-Other engineering surfaces such as database, messaging, deployment, config and observability are classified, but their deeper contract semantics are intentionally not presented as complete yet.
+Other engineering surfaces such as database, messaging, deployment, config, and observability are classified, but their deeper contract semantics are intentionally not presented as complete yet.
 
 ## Quick start
 
@@ -154,13 +153,13 @@ changeguard pr `
   --verification-plan
 ```
 
-`--verification-plan` implies semantic, dependency and impact analysis. It does **not** execute remote project code.
+`--verification-plan` implies semantic, dependency, and impact analysis. It does **not** execute remote project code.
 
 Use `--json` to emit a `ChangeManifest`.
 
 ## Revision-bound verification
 
-Generated PR verification plans now carry the exact analyzed `expected_head`.
+Generated PR verification plans carry the exact analyzed `expected_head`.
 
 A plan can be executed explicitly from a local checkout:
 
@@ -229,7 +228,7 @@ Model-backed selectors receive typed evidence records and return only a structur
 5. fails closed if mandatory evidence itself exceeds the budget,
 6. renders wording deterministically.
 
-Runtime-mandatory evidence currently includes actual verification results, active impact candidates and semantic changes linked to active impacts through runtime source-path provenance.
+Runtime-mandatory evidence currently includes actual verification results, active impact candidates, and semantic changes linked to active impacts through runtime source-path provenance.
 
 ## Canonical end-to-end demo
 
@@ -259,9 +258,9 @@ ChangeGuard keeps deterministic impact evaluation separate from model-selection 
 changeguard evaluate --strict
 ```
 
-The current `rest-impact-v3` controlled corpus contains 24 cases. CI requires all 24 disposition + verification-plan expectations to match. The evaluator also reports impact and endpoint TP/FP/TN/FN, precision/recall/FPR, technology breakdown and deterministic-core latency.
+The current `rest-impact-v3` controlled corpus contains 24 cases. CI requires all 24 disposition + verification-plan expectations to match. The evaluator also reports impact and endpoint TP/FP/TN/FN, precision/recall/FPR, technology breakdown, and deterministic-core latency.
 
-These are **controlled-corpus metrics**, not production accuracy. Latency excludes GitHub access, JVM parsing, Maven execution and model inference.
+These are **controlled-corpus metrics**, not production accuracy. Latency excludes GitHub access, JVM parsing, Maven execution, and model inference.
 
 ### Raw selector evaluation
 
@@ -273,7 +272,7 @@ changeguard evaluate-selector `
   --runs 3
 ```
 
-Metrics include required-evidence recall, precision, distractor rate, distinct-consumer coverage, verification retention, grounding, latency, tokens and repeated-run stability.
+Metrics include required-evidence recall, precision, distractor rate, distinct-consumer coverage, verification retention, grounding, latency, tokens, and repeated-run stability.
 
 ### Raw vs effective policy evaluation
 
@@ -286,7 +285,7 @@ changeguard evaluate-selector-policy `
   --runs 3
 ```
 
-This reports model quality and post-policy effective quality from the **same provider call**, so deterministic corrections are visible instead of being hidden inside an aggregate score.
+This reports model quality and post-policy effective quality from the **same provider call**, including runtime policy-mandatory retention and corpus-policy diagnostics. Deterministic corrections remain visible instead of being hidden inside an aggregate score.
 
 ### Production-shaped release evaluation
 
@@ -312,11 +311,11 @@ changeguard evaluate-release `
   --runs 3
 ```
 
-The overall release gate requires deterministic corpus exactness, full grounding, 100% effective runtime policy-mandatory retention and no runtime-corpus policy-semantic contradictions. See [`docs/release-evaluation.md`](docs/release-evaluation.md).
+The overall release gate requires deterministic corpus exactness, full grounding, 100% effective runtime policy-mandatory retention, and no runtime-corpus policy-semantic contradictions. CI executes the deterministic release gate on Python 3.12. See [`docs/release-evaluation.md`](docs/release-evaluation.md).
 
 ## Seeded verification benchmarks
 
-The repository contains controlled Maven fixtures for WebClient, OpenFeign and RestTemplate path-break scenarios.
+The repository contains controlled Maven fixtures for WebClient, OpenFeign, and RestTemplate path-break scenarios.
 
 One seeded vertical is:
 
@@ -348,11 +347,9 @@ These fixtures test the deterministic vertical and command construction. They ar
 
 ## Current limitations
 
-The supported scope is intentionally explicit:
-
 - Maven is the only verification build system currently implemented.
 - Maven layout discovery uses direct reactor/module evidence rather than full effective-model/profile resolution.
-- Consumer-call extraction focuses on static/literal routes supported by WebClient, Feign and RestTemplate analyzers.
+- Consumer-call extraction focuses on static/literal routes supported by WebClient, Feign, and RestTemplate analyzers.
 - Dynamic routes and unsupported client frameworks may remain at service-level evidence or be outside explicit call refinement.
 - Database migration and messaging-contract semantics are not yet deep enough for release guarantees.
 - A matching Git `HEAD` does not prove an otherwise clean/hermetic workspace.
@@ -361,7 +358,29 @@ The supported scope is intentionally explicit:
 
 ## Design decisions
 
-Architecture decisions are recorded under [`docs/decisions`](docs/decisions). Important boundaries include deterministic-first analysis, module-scoped identity, reactor-aware verification, LangGraph grounding, provider-backed evidence-ID selection, local Ollama selection, model-evaluation protocol, deterministic decision-critical closure, revision binding and runtime-shaped release evaluation.
+Architecture decisions are recorded under [`docs/decisions`](docs/decisions). Important boundaries include deterministic-first analysis, module-scoped identity, reactor-aware verification, LangGraph grounding, provider-backed evidence-ID selection, local Ollama selection, model-evaluation protocol, deterministic decision-critical closure, revision binding, and runtime-shaped release evaluation.
+
+## Release checklist
+
+Before tagging V1:
+
+```powershell
+pytest
+mvn -f analyzers/java-spring/pom.xml test
+changeguard evaluate --strict
+changeguard evaluate-release --selector deterministic --runs 3 --strict
+changeguard --help
+```
+
+A live Ollama release-candidate measurement is useful but is intentionally separate from the offline deterministic release gate:
+
+```powershell
+changeguard evaluate-release `
+  --selector ollama `
+  --model llama3.2:3b `
+  --warmup-runs 1 `
+  --runs 3
+```
 
 ## Post-V1 extensions
 
