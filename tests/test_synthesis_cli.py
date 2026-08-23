@@ -1,5 +1,6 @@
 from typer.testing import CliRunner
 
+from changeguard import __version__
 from changeguard.cli import app
 from changeguard.models import ChangeManifest
 from changeguard.synthesis import SynthesisSelection
@@ -25,7 +26,7 @@ def test_synthesize_command_reads_manifest_and_emits_grounded_report(tmp_path):
     result = runner.invoke(app, ["synthesize", "--manifest", str(path)])
 
     assert result.exit_code == 0
-    assert "ChangeGuard 1.0.0rc1 synthesis | acme/empty" in result.stdout
+    assert f"ChangeGuard {__version__} synthesis | acme/empty" in result.stdout
     assert "selector: deterministic" in result.stdout
     assert "No active cross-service impact candidate" in result.stdout
     assert "Only supplied ChangeGuard evidence" in result.stdout
@@ -43,7 +44,7 @@ def test_synthesize_command_accepts_utf8_bom_manifest(tmp_path):
     result = runner.invoke(app, ["synthesize", "--manifest", str(path)])
 
     assert result.exit_code == 0
-    assert "ChangeGuard 1.0.0rc1 synthesis | acme/powershell" in result.stdout
+    assert f"ChangeGuard {__version__} synthesis | acme/powershell" in result.stdout
 
 
 def test_synthesize_json_is_machine_readable(tmp_path):
@@ -96,7 +97,7 @@ def test_synthesize_openai_selector_is_wired_without_provider_call(tmp_path, mon
     )
 
     assert result.exit_code == 0
-    assert "ChangeGuard 1.0.0rc1 synthesis | acme/model" in result.stdout
+    assert f"ChangeGuard {__version__} synthesis | acme/model" in result.stdout
     assert "selector: openai | model: fake-model | tokens: input=19 output=4" in result.stdout
     assert "Model participation is limited to evidence-ID selection" in result.stdout
 
@@ -145,7 +146,7 @@ def test_synthesize_ollama_selector_is_wired_without_local_call(tmp_path, monkey
         "model": "fake-local-model",
         "base_url": "http://127.0.0.1:11434",
     }
-    assert "ChangeGuard 1.0.0rc1 synthesis | acme/local-model" in result.stdout
+    assert f"ChangeGuard {__version__} synthesis | acme/local-model" in result.stdout
     assert "selector: ollama | model: fake-local-model | tokens: input=31 output=5" in result.stdout
     assert "Model participation is limited to evidence-ID selection" in result.stdout
 
