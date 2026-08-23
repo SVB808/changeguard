@@ -27,6 +27,7 @@ def build_verification_plans(
     candidates: list[ImpactCandidate],
     graph: ServiceDependencyGraph,
     module_layout: dict[str, MavenModuleLayout] | None = None,
+    expected_head: str | None = None,
 ) -> list[VerificationPlan]:
     """Create reviewable Maven test plans for endpoint-backed impact candidates.
 
@@ -37,6 +38,9 @@ def build_verification_plans(
     a module selector relative to that reactor root. This makes nested-monorepo plans
     executable from the repository root instead of assuming the repository root itself
     contains the relevant Maven aggregator.
+
+    `expected_head` binds generated plans to the exact analyzed revision. Execution
+    refuses to run a bound plan in a workspace checked out at another commit.
     """
     plans: list[VerificationPlan] = []
     layout_by_module = module_layout or {}
@@ -74,6 +78,7 @@ def build_verification_plans(
                 endpoint=endpoint,
                 command=command,
                 reason=reason,
+                expected_head=expected_head,
             )
         )
 
@@ -109,8 +114,14 @@ def execute_verification_plan(
     repo_path: Path | str,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    revision_reader: Callable[[Path], str] | None = None,
 ) -> VerificationResult:
-    """Execute a previously reviewed plan in an explicit local repository workspace."""
+    """Execute a previously reviewed plan in an explicit local repository workspace.
+
+    Bound plans are checked against the workspace's exact Git HEAD before any Maven
+    command is resolved or executed. A mismatch or unreadable revision is returned as
+    `ERROR` and project code is not run.
+    """
     workspace = Path(repo_path).expanduser().resolve()
 
     validation_error = _validate_workspace(workspace, plan)
@@ -120,6 +131,29 @@ def execute_verification_plan(
             status=VerificationStatus.ERROR,
             error=validation_error,
         )
+
+    if plan.expected_head is not None:
+        read_revision = revision_reader or _read_git_head
+        try:
+            actual_head = read_revision(workspace).strip()
+        except Exception as exc:
+            return VerificationResult(
+                plan=plan,
+                status=VerificationStatus.ERROR,
+                error=f"Could not read verification workspace Git HEAD: {exc}",
+            )
+
+        expected_head = plan.expected_head.strip()
+        if actual_head.lower() != expected_head.lower():
+            return VerificationResult(
+                plan=plan,
+                status=VerificationStatus.ERROR,
+                error=(
+                    "Verification revision mismatch: plan expects HEAD "
+                    f"{expected_head}, but workspace HEAD is {actual_head}. "
+                    "Refusing to execute project code for a different revision."
+                ),
+            )
 
     process_command = plan.command
     if runner is subprocess.run:
@@ -191,6 +225,7 @@ def execute_verification_plan(
 def create_maven_module_plan(
     consumer_service: str,
     consumer_module: str,
+    expected_head: str | None = None,
 ) -> VerificationPlan:
     """Create an explicit local-only module verification plan for CLI execution."""
     return VerificationPlan(
@@ -201,7 +236,24 @@ def create_maven_module_plan(
         trigger_kind=EndpointChangeKind.ENDPOINT_REMOVED,
         command=["mvn", "-pl", consumer_module, "-am", "test"],
         reason="Explicit local Maven module verification requested by the user.",
+        expected_head=expected_head,
     )
+
+
+def _read_git_head(workspace: Path) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or "git rev-parse HEAD failed"
+        raise RuntimeError(detail)
+    head = completed.stdout.strip()
+    if not head:
+        raise RuntimeError("git rev-parse HEAD returned an empty revision")
+    return head
 
 
 def _resolve_process_command(
