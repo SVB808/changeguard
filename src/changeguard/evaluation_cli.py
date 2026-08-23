@@ -4,6 +4,7 @@ from pathlib import Path
 
 import typer
 
+from changeguard import __version__
 from changeguard.evaluation import EvaluationReport, evaluate_corpus, load_corpus
 
 
@@ -54,7 +55,7 @@ def evaluate_cmd(
 
 def _print_report(report: EvaluationReport, details: bool) -> None:
     typer.echo(
-        f"ChangeGuard V4.2 | corpus: {report.corpus_version} | "
+        f"ChangeGuard {__version__} impact evaluation | corpus: {report.corpus_version} | "
         f"{report.total_cases} case(s)"
     )
     typer.echo(
