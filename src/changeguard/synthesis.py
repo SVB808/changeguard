@@ -252,18 +252,13 @@ def synthesize_manifest(
     return SynthesisReport.model_validate(output["report"])
 
 
-def apply_decision_critical_policy(
-    evidence: list[EvidenceItem],
-    selection: SynthesisSelection,
-) -> SynthesisSelection:
-    """Preserve decision-critical evidence after a selector returns grounded IDs.
+def decision_critical_evidence_ids(evidence: list[EvidenceItem]) -> list[str]:
+    """Return evidence IDs the runtime policy must preserve.
 
-    Model selection remains useful for optional context, but it is not allowed to hide
-    actual verification results, active impact candidates, or semantic change facts that
-    are directly linked to an active impact through shared source-path provenance.
+    This is the single source of truth for policy-mandatory evidence. Verification
+    results and active impacts are always mandatory. Semantic changes are mandatory
+    only when their source provenance overlaps an active impact's provenance.
     """
-    _validate_selection(evidence, selection)
-
     verification_items = [
         item for item in evidence if item.category == EvidenceCategory.VERIFICATION_RESULT
     ]
@@ -280,9 +275,23 @@ def apply_decision_critical_policy(
         if item.category == EvidenceCategory.SEMANTIC_CHANGE
         and impact_paths.intersection(item.source_paths)
     ]
-
     mandatory_items = verification_items + impact_items + linked_semantic_items
-    mandatory_ids = list(dict.fromkeys(item.id for item in mandatory_items))
+    return list(dict.fromkeys(item.id for item in mandatory_items))
+
+
+def apply_decision_critical_policy(
+    evidence: list[EvidenceItem],
+    selection: SynthesisSelection,
+) -> SynthesisSelection:
+    """Preserve decision-critical evidence after a selector returns grounded IDs.
+
+    Model selection remains useful for optional context, but it is not allowed to hide
+    actual verification results, active impact candidates, or semantic change facts that
+    are directly linked to an active impact through shared source-path provenance.
+    """
+    _validate_selection(evidence, selection)
+
+    mandatory_ids = decision_critical_evidence_ids(evidence)
     if len(mandatory_ids) > MAX_SELECTED_EVIDENCE:
         raise SynthesisGuardrailError(
             "Decision-critical evidence exceeds the synthesis budget: "
@@ -292,7 +301,8 @@ def apply_decision_critical_policy(
         )
 
     raw_ids = selection.selected_evidence_ids
-    extras = [item_id for item_id in raw_ids if item_id not in set(mandatory_ids)]
+    mandatory_set = set(mandatory_ids)
+    extras = [item_id for item_id in raw_ids if item_id not in mandatory_set]
     available_extra_slots = MAX_SELECTED_EVIDENCE - len(mandatory_ids)
     kept_extras = extras[:available_extra_slots]
     effective_ids = mandatory_ids + kept_extras
