@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 
 from changeguard.dependency_graph import ServiceDependencyGraphBuilder
+from changeguard.effective_selection_evaluation_cli import evaluate_selector_policy_cmd
 from changeguard.evaluation_cli import evaluate_cmd
 from changeguard.git_client import GitError
 from changeguard.github_client import GitHubAPIError, GitHubClient
@@ -28,6 +29,7 @@ app = typer.Typer(
 )
 app.command("evaluate")(evaluate_cmd)
 app.command("evaluate-selector")(evaluate_selector_cmd)
+app.command("evaluate-selector-policy")(evaluate_selector_policy_cmd)
 app.command("compare-selector-evals")(compare_selector_evals_cmd)
 app.command("synthesize")(synthesize_cmd)
 
