@@ -1,0 +1,16 @@
+{
+  "observations": [
+    {
+      "observed_at": "2026-08-23T10:30:00+00:00",
+      "consumer_service": "legacy-mobile",
+      "consumer_version": "11",
+      "provider_service": "orders-service",
+      "http_method": "GET",
+      "path": "/v1/orders/42",
+      "request_count": 17,
+      "status_code": 200,
+      "source": "seeded-runtime",
+      "event_id": "runtime-benchmark-legacy-mobile-v11"
+    }
+  ]
+}
