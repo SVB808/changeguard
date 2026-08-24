@@ -24,6 +24,7 @@ ai = [
 
 [project.scripts]
 changeguard = "changeguard.cli:app"
+changeguard-runtime = "changeguard.runtime_cli:runtime_app"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
