@@ -1,5 +1,10 @@
 # ChangeGuard
 
+[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/SVB808/changeguard/releases/tag/v1.0.0)
+[![ChangeGuard CI](https://github.com/SVB808/changeguard/actions/workflows/ci.yml/badge.svg)](https://github.com/SVB808/changeguard/actions)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Java](https://img.shields.io/badge/java-17%2B-orange)
+
 **ChangeGuard is a deterministic-first cross-service change-impact and release-risk engine for Java/Spring microservices.**
 
 Its core question is:
@@ -12,7 +17,18 @@ Most code-review tools stop at the diff. ChangeGuard connects provider-side chan
 evidence -> inference -> verification -> grounded synthesis
 ```
 
-The current package is the **`1.0.0rc1` release candidate**.
+The current stable release is **`v1.0.0`**.
+
+## V1 at a glance
+
+- Deterministic Java/Spring semantic analysis for REST and selected Spring Security changes.
+- Module-scoped dependency and consumer-call evidence for WebClient, OpenFeign, and RestTemplate.
+- Revision-bound Maven verification plans that refuse execution when the local Git `HEAD` does not match the analyzed revision.
+- Grounded LangGraph synthesis with deterministic, Ollama, or optional OpenAI evidence-ID selection.
+- Deterministic grounding and decision-critical policy closure remain authoritative after model selection.
+- A controlled 24-case impact corpus and runtime-shaped release evaluation keep deterministic correctness separate from model quality.
+
+For a concise project narrative, interview framing, and resume-ready proof points, see [`docs/portfolio.md`](docs/portfolio.md).
 
 ## What makes ChangeGuard different
 
@@ -287,7 +303,7 @@ changeguard evaluate-selector-policy `
 
 This reports model quality and post-policy effective quality from the **same provider call**, including runtime policy-mandatory retention and corpus-policy diagnostics. Deterministic corrections remain visible instead of being hidden inside an aggregate score.
 
-### Production-shaped release evaluation
+### Runtime-shaped release evaluation
 
 ```powershell
 changeguard evaluate-release `
@@ -360,9 +376,9 @@ These fixtures test the deterministic vertical and command construction. They ar
 
 Architecture decisions are recorded under [`docs/decisions`](docs/decisions). Important boundaries include deterministic-first analysis, module-scoped identity, reactor-aware verification, LangGraph grounding, provider-backed evidence-ID selection, local Ollama selection, model-evaluation protocol, deterministic decision-critical closure, revision binding, and runtime-shaped release evaluation.
 
-## Release checklist
+## V1 validation commands
 
-Before tagging V1:
+The stable `v1.0.0` release was promoted only after the release-candidate validation path was green. The same checks can be rerun locally:
 
 ```powershell
 pytest
@@ -372,7 +388,7 @@ changeguard evaluate-release --selector deterministic --runs 3 --strict
 changeguard --help
 ```
 
-A live Ollama release-candidate measurement is useful but is intentionally separate from the offline deterministic release gate:
+A live Ollama measurement is useful but intentionally separate from the offline deterministic release gate:
 
 ```powershell
 changeguard evaluate-release `
@@ -384,7 +400,7 @@ changeguard evaluate-release `
 
 ## Post-V1 extensions
 
-Useful follow-on work that should not block the V1 portfolio release:
+Useful follow-on work that should not be confused with V1 guarantees:
 
 - Gradle verification planning
 - deeper database migration compatibility analysis
