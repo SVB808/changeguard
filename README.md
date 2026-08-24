@@ -1,6 +1,6 @@
 # ChangeGuard
 
-[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/SVB808/changeguard/releases/tag/v1.0.0)
+[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/SVB808/changeguard/tree/v1.0.0)
 [![ChangeGuard CI](https://github.com/SVB808/changeguard/actions/workflows/ci.yml/badge.svg)](https://github.com/SVB808/changeguard/actions)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Java](https://img.shields.io/badge/java-17%2B-orange)
