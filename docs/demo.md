@@ -1,6 +1,6 @@
 # ChangeGuard canonical end-to-end demo
 
-This demo shows the V1 release-candidate flow without granting a model authority over source parsing or command execution.
+This demo shows the stable V1 flow without granting a model authority over source parsing or command execution.
 
 ## 1. Prepare the environment
 
@@ -90,7 +90,7 @@ changeguard synthesize `
 
 A `FAILED` command is reported as process evidence, not automatic causal proof. A `PASSED` command confirms only that the selected command exited zero.
 
-## 7. Run the release-candidate evaluation
+## 7. Run the stable V1 release evaluation
 
 Offline release gate:
 
@@ -112,6 +112,14 @@ changeguard evaluate-release `
 ```
 
 The release report separates deterministic impact correctness, raw selector quality, effective post-policy quality, grounding, runtime policy-mandatory retention, and corpus-policy diagnostics.
+
+## 8. Suggested 3-minute portfolio walkthrough
+
+1. Start with the problem: a provider-side API change can break consumers in files untouched by the PR.
+2. Show the generated manifest and point out exact base/head revisions, semantic changes, consumer-call evidence, and targeted verification plans.
+3. Run grounded synthesis and explain that the model chooses only from existing evidence IDs; it does not inspect arbitrary source or execute commands.
+4. Show revision-bound verification and explain why `HEAD` mismatch is a hard refusal instead of a warning.
+5. End with `evaluate-release` and distinguish controlled-corpus/runtime-shaped metrics from production accuracy.
 
 ## Safety boundaries demonstrated
 
