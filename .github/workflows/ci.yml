@@ -44,9 +44,11 @@ jobs:
         if: matrix.python-version == '3.12'
         run: changeguard evaluate-release --selector deterministic --runs 2 --strict
 
-      - name: Smoke test installed CLI
+      - name: Smoke test installed CLIs
         if: matrix.python-version == '3.12'
-        run: changeguard --help
+        run: |
+          changeguard --help
+          changeguard-runtime --help
 
   ai-provider-contract:
     name: Optional AI provider contract

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from changeguard import __version__
 from changeguard.effective_selection_evaluation import (
     EffectiveSelectionEvaluationReport,
     evaluate_effective_selector,
@@ -49,7 +50,7 @@ def evaluate_release_candidate(
     corpus_policy_gate = not runtime_selection.corpus_policy_diagnostics
 
     return ReleaseEvaluationReport(
-        release_candidate="1.0.0rc1",
+        release_candidate=__version__,
         deterministic_impact=deterministic,
         runtime_selection=runtime_selection,
         deterministic_gate_passed=deterministic_gate,
